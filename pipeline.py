@@ -45,20 +45,23 @@ class ProcessingPipeline:
         self.steps = []
 
     def add_step(self, step: ProcessingStep):
+        if not self.steps:
+            # C'est la toute première étape
+            if step.input_dir is None:
+                raise ValueError("The first step must have an input_dir defined.")
+        else:
+            # On a déjà au moins un step précédent
+            previous_step = self.steps[-1]
+            if step.input_dir is None:
+                # Si pas défini, on prend automatiquement l'output du précédent
+                step.input_dir = previous_step.output_dir
+
         self.steps.append(step)
 
     def run(self, from_step=0, only_one=False):
-        previous_output = None
-
-        steps_to_run = [self.steps[from_step]] if only_one else self.steps[from_step:]
-
-        for i, step in enumerate(steps_to_run, start=from_step):
+        for i, step in enumerate(
+            [self.steps[from_step]] if only_one else self.steps[from_step:],
+            start=from_step,
+        ):
             print(f"Running step {i}: {step.name}")
-
-            if step.input_dir is None and previous_output is not None:
-                step_input = previous_output
-            else:
-                step_input = step.input_dir
-
-            step.run(input_dir=step_input)
-            previous_output = step.output_dir
+            step.run()
