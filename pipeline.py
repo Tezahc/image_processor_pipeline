@@ -47,10 +47,12 @@ class ProcessingPipeline:
     def add_step(self, step: ProcessingStep):
         self.steps.append(step)
 
-    def run(self, from_step=0):
+    def run(self, from_step=0, only_one=False):
         previous_output = None
 
-        for i, step in enumerate(self.steps[from_step:], start=from_step):
+        steps_to_run = [self.steps[from_step]] if only_one else self.steps[from_step:]
+
+        for i, step in enumerate(steps_to_run, start=from_step):
             print(f"Running step {i}: {step.name}")
 
             if step.input_dir is None and previous_output is not None:
