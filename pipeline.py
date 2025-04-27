@@ -7,11 +7,13 @@ class ProcessingStep:
                  name: str,
                  process_fn: Callable,
                  output_dir: str,
-                 input_dir: str = None):
+                 input_dir: str = None,
+                 fixed_input: bool = False):
         self.name = name
         self.process_fn = process_fn
         self.input_dir = input_dir
         self.output_dir = output_dir
+        self.fixed_input = fixed_input  # <<<<< Nouveau attribut
 
     def run(self, input_dir=None):
         input_path = Path(input_dir or self.input_dir)
@@ -44,19 +46,41 @@ class ProcessingPipeline:
     def __init__(self):
         self.steps = []
 
-    def add_step(self, step: ProcessingStep):
+    def add_step(self, step: ProcessingStep, position=None):
         if not self.steps:
-            # C'est la toute première étape
+            # Première étape : on exige un input_dir défini
             if step.input_dir is None:
                 raise ValueError("The first step must have an input_dir defined.")
-        else:
-            # On a déjà au moins un step précédent
+            self.steps.append(step)
+            return
+
+        if position is None:
+            # Ajout normal en fin de pipeline
             previous_step = self.steps[-1]
             if step.input_dir is None:
-                # Si pas défini, on prend automatiquement l'output du précédent
+                step.input_dir = previous_step.output_dir
+            self.steps.append(step)
+        else:
+            # Insertion à une position donnée
+            if position < 0 or position > len(self.steps):
+                raise IndexError("Invalid position to insert step.")
+
+            if position == 0:
+                raise ValueError("Cannot insert at position 0. Input_dir must be set manually for the first step.")
+
+            previous_step = self.steps[position - 1]
+            next_step = self.steps[position] if position < len(self.steps) else None
+
+            # Définir input_dir si nécessaire
+            if step.input_dir is None:
                 step.input_dir = previous_step.output_dir
 
-        self.steps.append(step)
+            # Insertion
+            self.steps.insert(position, step)
+
+            # Mettre à jour input_dir de la prochaine étape si elle n'est pas fixe
+            if next_step and not next_step.fixed_input:
+                next_step.input_dir = step.output_dir
 
     def run(self, from_step=0, only_one=False):
         for i, step in enumerate(
