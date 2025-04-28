@@ -1,114 +1,76 @@
-import os
 import random
+from pathlib import Path
+from typing import Optional, Dict
 from PIL import Image
-from tqdm import tqdm
-import time
-import concurrent.futures
 
-# Dossiers
-RACINE = r"C:\Users\GuillaumeChazet\Documents\ICUREsearch\DeepValve\Bionector\Overlays\Photos"
-source_dir = os.path.join(RACINE, "symétries")
-target_dir = os.path.join(RACINE, "rotations")
 
-# Créer le dossier cible s'il n'existe pas
-os.makedirs(target_dir, exist_ok=True)
-
-def process_single_image(source_path, target_dir, num_rotations=100):
+def process_rotations(
+    input_path: Path,
+    num_rotations: int = 10,
+    include_original: bool = True
+) -> Optional[Dict[str, Image.Image]]:
     """
-    Traite une seule image : la copie, puis génère et sauvegarde ses rotations.
-    Conçue pour être exécutée dans un processus séparé.
+    Charge une image et génère plusieurs rotations aléatoires de celle-ci.
+
+    Args:
+        input_path (Path): Chemin vers l'image d'entrée.
+        num_rotations (int): Nombre de rotations aléatoires à générer.
+        include_original (bool): Si True, inclut également l'image originale
+                                 (convertie en RGBA) dans le dictionnaire retourné
+                                 sous la clé 'original'.
+
+    Returns:
+        Optional[Dict[str, Image.Image]]: Un dictionnaire où les clés sont
+        'r001', 'r002', ..., 'rN' (et potentiellement 'original' = r000) et les valeurs
+        sont les objets PIL.Image correspondants (en RGBA).
+        Retourne None si l'image ne peut pas être ouverte.
     """
     try:
-        file_name = os.path.basename(source_path)
-        target_path = os.path.join(target_dir, file_name)
+        # Charger l'image et s'assurer qu'elle est en RGBA pour la rotation
+        # La conversion est faite ici pour être cohérente entre l'original et les rotations
+        img = Image.open(input_path).convert("RGBA")
+        width, height = img.size # Obtenir les dimensions originales
 
-        # Charger l'image une seule fois
-        img = Image.open(source_path).convert("RGBA") # Convertir en RGBA
+        results: Dict[str, Image.Image] = {}
 
-        # 1. Copier l'image d'origine dans le dossier cible
-        #    Note: Si vous ne voulez PAS copier l'original, commentez la ligne suivante.
-        img.save(target_path, "png")
+        # Ajouter l'original si demandé
+        if include_original:
+            results['r000'] = img.copy() # Copie pour éviter modif accidentelle
 
-        # 2. Effectuer les rotations
-        count = 0
+        # Générer les rotations
         for i in range(num_rotations):
-            # Générer un angle aléatoire entre 0 et 360 degrés
-            angle = random.uniform(0, 360)
+            # Générer un angle aléatoire entre 1 et 359 degrés (0 est l'original)
+            # On pourrait aussi faire 0-360, mais 0 est redondant si 'original' est inclus.
+            angle = random.uniform(1, 359)
 
-            # Effectuer la rotation (expand=True pour éviter de couper l'image)
-            rotated = img.rotate(angle, expand=True) #, resample=Image.Resampling.BICUBIC) # BICUBIC pour meilleure qualité
+            # Effectuer la rotation
+            # expand=True : agrandit la taille de l'image pour contenir toute l'image tournée
+            # fillcolor=(0,0,0,0) : remplit le fond ajouté avec du transparent (pour RGBA)
+            rotated = img.rotate(angle, expand=True, fillcolor=None) # resample=Image.Resampling.BICUBIC est optionnel pour qualité
 
-            # Recadrer l'image pour supprimer les zones vides (transparentes) ajoutées par expand=True
-            # getbbox() trouve la boîte englobante du contenu non transparent
+            # Recadrer pour enlever le maximum de fond transparent ajouté
+            # getbbox() trouve la boîte englobante du contenu non-transparent (alpha > 0)
             bbox = rotated.getbbox()
-            cropped = rotated.crop(bbox)
 
-            # Enregistrer l'image avec le préfixe
-            rotated_name = os.path.join(target_dir, f"r{i+1}_{file_name}")
-            cropped.save(rotated_name, "png")
-            count += 1
+            # Si bbox est None, cela peut arriver si l'image est complètement transparente
+            # ou si une erreur se produit. On garde l'image tournée telle quelle.
+            if bbox:
+                cropped = rotated.crop(bbox)
+                # Vérifier si le recadrage n'a pas résulté en une image de taille nulle
+                if cropped.width > 0 and cropped.height > 0:
+                     results[f'r{i+1:03d}'] = cropped
+                else:
+                     print(f"Avertissement [Rotation {input_path.name}]: Recadrage après rotation {i+1} a produit une image vide. Utilisation de l'image tournée non recadrée.")
+                     results[f'r{i+1:03d}'] = rotated # Sauvegarde non recadrée si le crop échoue
+            else:
+                 print(f"Avertissement [Rotation {input_path.name}]: Impossible d'obtenir BBox après rotation {i+1}. Utilisation de l'image tournée non recadrée.")
+                 results[f'r{i+1:03d}'] = rotated # Sauvegarde non recadrée
 
-        # Retourner le nom du fichier et le nombre de rotations réussies
-        return file_name, count
-    
+        return results
+
+    except FileNotFoundError:
+        print(f"Erreur [Rotation]: Fichier non trouvé {input_path}")
+        return None
     except Exception as e:
-        # En cas d'erreur (ex: fichier corrompu), logguer et continuer
-        print(f"Erreur lors du traitement de {os.path.basename(source_path)}: {e}")
-        return os.path.basename(source_path), 0 # Retourne 0 rotation pour ce fichier
-
-if __name__ == '__main__':
-    MAX_WORKERS = 8 # os.cpu_count() # -> 16
-    NUM_ROTATIONS = 160
-
-    print(f"Dossier source : {source_dir}")
-    print(f"Dossier cible  : {target_dir}")
-    print(f"Nombre de rotations par image : {NUM_ROTATIONS}")
-    print(f"Utilisation de {MAX_WORKERS} processus parallèles.")
-
-    # Lister les fichiers PNG à traiter
-    files_to_process = [
-        os.path.join(source_dir, file_name)
-        for file_name in os.listdir(source_dir)
-        if file_name.lower().endswith(".png")
-    ]
-
-    if not files_to_process:
-        print("Aucun fichier PNG trouvé dans le dossier source.")
-
-    print(f"{len(files_to_process)} images PNG à traiter...")
-
-    start_time = time.time()
-    processed_count = 0
-
-    # Utiliser ProcessPoolExecutor pour la parallélisation
-    # 'with' s'assure que le pool est correctement fermé à la fin
-    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        # Soumettre toutes les tâches au pool
-        # future_to_path = {executor.submit(process_single_image, path, target_dir, NUM_ROTATIONS): path for path in files_to_process}
-        futures = [executor.submit(process_single_image, path, target_dir, NUM_ROTATIONS) for path in files_to_process]
-
-        # Utiliser tqdm pour afficher la progression au fur et à mesure que les tâches se terminent
-        for future in concurrent.futures.as_completed(futures):
-            # print(future)
-            try:
-                # Récupérer le résultat de la tâche terminée
-                file_name, rotations_count = future.result()
-                if rotations_count > 0:
-                    processed_count += 1
-                # Optionnel: Afficher un message pour chaque fichier terminé (peut ralentir si beaucoup de fichiers)
-                # print(f"Terminé: {file_name} ({rotations_count} rotations)")
-            except Exception as exc:
-                # Gérer les exceptions qui pourraient survenir pendant l'exécution de la tâche
-                # Bien que process_single_image ait son propre try/except, une erreur de 'pickle' ou autre pourrait survenir ici.
-                print(f'Une tâche a généré une exception: {exc}')
-
-
-    end_time = time.time()
-    duration = end_time - start_time
-    total_rotations_saved = len(os.listdir(target_dir))
-
-    print("-" * 30)
-    print(f"Traitement terminé en {duration:.2f} secondes.")
-    print(f"{processed_count} fichiers images traités.")
-    print(f"{total_rotations_saved} rotations sauvegardées dans {target_dir}")
-    print("-" * 30)
+        print(f"Erreur [Rotation] lors du traitement de {input_path.name}: {e}")
+        return None
