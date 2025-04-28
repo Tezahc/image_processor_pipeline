@@ -1,5 +1,6 @@
 from typing import Callable, Union, List
 from pathlib import Path
+import cv2
 import utils.utils as u
 
 
@@ -23,15 +24,23 @@ class ProcessingStep:
     def update_options(self, **new_kwargs):
         self.process_kwargs.update(new_kwargs)
 
-    def run(self, input_dir=None):
+    def run(self, input_dir: Path=None):
+        self.processed_files = []
         input_path = Path(input_dir or self.input_dir)
         output_path = Path(self.output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
         image_files = [f for f in input_path.glob('*') if f.suffix.lower() in ('.jpg', '.jpeg', '.png')]
         for file in image_files:
-            result = self.process_function(file, **self.process_kwargs)
-            result.save(output_path / file.name)
+            try:
+            # permet de continuer le traitement en cas d'erreur
+                result = self.process_function(file, **self.process_kwargs)
+                if result is not None:
+                    output_file = output_path / file.name
+                    cv2.imwrite(str(output_file), result) # TODO: faudra gérer l'enregistrement si la fonction utilise une autre lib (ex PIL) -> méthode save avec un case ?
+                    self.processed_files.append(output_file)
+            except Exception as e:
+                print(f"Erreur lors du traitement de {file.name}: {e}")
 
 
 class MultiInputOutputStep(ProcessingStep):
