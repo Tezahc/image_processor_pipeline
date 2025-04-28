@@ -1,107 +1,267 @@
-from typing import Any, Callable, Optional, List, Union, Tuple, Dict
 from pathlib import Path
-import cv2
-import numpy as np
+from typing import Callable, List, Dict, Optional, Union, Tuple, Any, Iterator, Literal
 from .utils import utils as u
+import os
+import itertools
+from tqdm import tqdm
 
 
 class ProcessingStep:
     def __init__(self,
                  name: str,
                  process_function: Callable,
-                 output_dir: str,
-                 input_dir: str = None,
-                 fixed_input: bool = False,
-                 root_dir: str = None,
-                 options: dict = None):
+                 input_dirs: List[Union[str, Path]],
+                 output_dirs: List[Union[str, Path]],
+                 pairing_strategy: Literal['one_input', 'zip', 'product', 'modulo', 'custom'] = 'one_input',
+                 pairing_function: Optional[Callable[[List[List[Path]]], Iterator[Tuple]]] = None,
+                 root_dir: Optional[Union[str, Path]] = None,
+                 options: Optional[Dict] = None):
+        """
+        Initialise une étape de traitement générique.
+
+        Args:
+            name (str): Nom lisible de l'étape.
+            process_function (Callable): La fonction qui effectue le traitement.
+                Signature attendue : (*input_paths: Path, output_paths: List[Path], **options) -> Optional[Union[Path, List[Path]]]
+                Doit accepter un nombre variable d'arguments Path en entrée (selon la stratégie),
+                la liste des chemins de sortie, et les options.
+                Doit retourner le(s) chemin(s) du/des fichier(s) sauvegardé(s), ou None si échec/rien à sauver.
+            input_dirs (List): Liste des chemins des dossiers d'entrée (relatifs ou absolus).
+            output_dirs (List): Liste des chemins des dossiers de sortie (relatifs ou absolus).
+            pairing_strategy (PairingStrategy): Comment combiner les fichiers des input_dirs.
+                Options: 'one_input' (défaut), 'zip', 'product', 'modulo', 'custom'.
+            pairing_function (Callable): Requis si strategy='custom'. Voir doc _generate_processing_args.
+            root_dir (Optional): Dossier racine pour résoudre les chemins relatifs.
+            options (Optional[Dict]): Arguments (kwargs) additionnels passés à process_function.
+        """
         self.name = name
         self.process_function = process_function
-        self.root_dir = root_dir
-        self.input_dir = u.check_path(input_dir, root_dir)
-        self.output_dir = u.check_path(output_dir, root_dir)
-        self.fixed_input = fixed_input
+        self.root_dir = Path(root_dir) if root_dir else Path.cwd() # Défaut CWD si non fourni
         self.process_kwargs = options or {}
 
-    def update_options(self, **new_kwargs):
-        self.process_kwargs.update(new_kwargs)
+        # Résolution des chemins
+        self.input_paths: List[Path] = self._resolve_paths(input_dirs or [])
+        self.output_paths: List[Path] = self._resolve_paths(output_dirs)
 
-    def _save_result(self, result: Any, input_file: Path) -> List[Path]:
-        saved_files = []
-        if result is None:
-            return saved_files
-        
-        if not self.output_dir:
-            print(f"Warning [{self.name}]: Aucun dossier de sortie défini pour sauvegarder le résultat de {input_file.name}.")
-            return saved_files
-        
-        output_dir = self.output_dir
+        if not self.output_paths:
+            raise ValueError(f"L'étape '{self.name}' doit avoir au moins un 'output_dirs' défini.")
 
-        try:
-            if isinstance(result, np.ndarray):
-                # Cas : Résultat unique de type OpenCV/Numpy
-                output_path = output_dir / input_file.name
-                success = cv2.imwrite(str(output_path), result)
-                if success:
-                    saved_files.append(output_path)
-                else:
-                    print(f"Erreur [{self.name}]: Échec de la sauvegarde OpenCV pour {output_path.name}")
-            
-            elif isinstance(result, dict):
-                # Cas : Dictionnaire de résultats (symétrie par ex)
-                # la clé est utilisée comme suffixe/identifiant
-                for key, img_data in result.items():
-                    # Vérifier le type de chaque élément dans le dict
-                    if isinstance(img_data, np.ndarray):
-                        output_filename = f"{input_file.name}_{key}{input_file.suffix}"
-                        output_path = output_dir / output_filename
+        # Validation de la stratégie (sécurité runtime)
+        # Note: Le type Literal fait déjà une vérification statique
+        valid_strategies = ['one_input', 'zip', 'product', 'modulo', 'custom']
+        if pairing_strategy not in valid_strategies: # Vérifie si la valeur est bien une des littérales
+            raise ValueError(f"Stratégie de pairing '{pairing_strategy}' invalide. Choisir parmi: {valid_strategies}")
+        if pairing_strategy == 'custom' and not callable(pairing_function):
+            raise ValueError("Une `pairing_function` valide est requise pour la stratégie 'custom'.")
+        self.pairing_strategy = pairing_strategy
+        self.pairing_function = pairing_function
 
-                        success = cv2.imwrite(str(output_path), img_data)
-                        if success: 
-                            saved_files.append(output_path)
-                        else:
-                            print(f"Erreur [{self.name}] : Échec de la sauvegarde OpenCV pour {output_path}")
-                    else:
-                        print(f"Warning [{self.name}] : Type non géré '{type(img_data)}' trouvé dans le dictionnaire retourne pour l'entrée {input_file.name} (clé: {key}).")
-        except Exception as e:
-            print(f"Erreur [{self.name}] : Exception lors de la tentative de sauvegarde du résultat de {input_file.name} : {e}")
-        
-        return saved_files
+        # Map pour suivre les sorties générées par entrée(s)
+        self.processed_files_map: Dict[Tuple[Path, ...], Union[Path, List[Path]]] = {} # Clé est tuple de Path d'entrée
 
-    def run(self, input_dir: Path=None):
-        self.processed_files = []
-        input_path = Path(input_dir or self.input_dir)
-        output_path = Path(self.output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+    def _resolve_paths(self, dir_list: List[Union[str, Path]]) -> List[Path]:
+        """Convertit et résout les chemins par rapport au root_dir."""
+        resolved = []
+        for d in dir_list:
+            path = Path(d)
+            # Si le chemin n'est pas absolu, on le considère relatif au root_dir
+            if not path.is_absolute():
+                resolved.append(self.root_dir / path)
+            else:
+                resolved.append(path)
+        return resolved
 
-        image_files = [f for f in input_path.glob('*') if f.suffix.lower() in ('.jpg', '.jpeg', '.png')]
-        for file in image_files:
+    # TODO: Implémenter __str__ pour un résumé utile de l'étape (inputs, outputs, stratégie)
+    def __str__(self) -> str:
+        input_str = ", ".join([p.name for p in self.input_paths])
+        output_str = ", ".join([p.name for p in self.output_paths])
+        return (f"Étape '{self.name}':\n"
+                f"  Entrée(s) : [{input_str}] (Stratégie: {self.pairing_strategy})\n"
+                f"  Sortie(s) : [{output_str}]\n"
+                f"  Options   : {self.process_kwargs}")
+
+    def _get_files_from_inputs(self) -> List[List[Path]]:
+        """Liste les fichiers de chaque dossier d'entrée. Lève une erreur si un dossier n'existe pas."""
+        all_file_lists = []
+        if not self.input_paths:
+            print(f"Avertissement [{self.name}]: Aucun dossier d'entrée défini.")
+            return [] # Retourne une liste vide de listes
+
+        print(f"Info [{self.name}]: Listage des fichiers d'entrée...")
+        for i, input_dir in enumerate(self.input_paths):
+            if not input_dir.is_dir():
+                # Lever une erreur si le dossier n'existe pas
+                raise FileNotFoundError(f"Le dossier d'entrée spécifié n'existe pas: '{input_dir}' pour l'étape '{self.name}'")
+
             try:
-            # permet de continuer le traitement en cas d'erreur
-                result = self.process_function(file, **self.process_kwargs)
-                if result is not None:
-                    output_file = output_path / file.name
-                    saved_files = self._save_result(result, file)
-                    if saved_files:
-                        self.processed_files.append(saved_files)
-
+                # Lister tous les fichiers (pas de filtrage d'extension ici) et trier
+                files = sorted([
+                    f for f in input_dir.iterdir() if f.is_file()
+                ])
+                print(f"  '{input_dir.name}': {len(files)} fichier(s) trouvé(s).")
+                all_file_lists.append(files)
             except Exception as e:
-                print(f"Erreur lors du traitement de {file.name}: {e}")
+                # Gérer autres erreurs potentielles (ex: permissions)
+                print(f"Erreur [{self.name}]: Échec du listage de {input_dir}: {e}")
+                # On pourrait lever une erreur ici aussi, ou juste ajouter une liste vide
+                # Levons une erreur pour être strict
+                raise IOError(f"Impossible de lister les fichiers dans {input_dir}") from e
 
+        return all_file_lists
 
-class MultiInputOutputStep(ProcessingStep):
+    def _generate_processing_args(self, input_file_lists: List[List[Path]]) -> Iterator[Tuple[Path, ...]]:
+        """
+        Génère les tuples d'arguments (chemins) pour process_function basé sur la stratégie.
+
+        Args:
+            input_file_lists: Liste contenant une liste de Path pour chaque dossier d'entrée.
+
+        Yields:
+            Tuple[Path, ...]: Un tuple de chemins (Path) à passer comme *args
+                              à la fonction de traitement pour chaque appel.
+        """
+        input_count = len(input_file_lists)
+
+        if self.pairing_strategy == 'one_input':
+            if input_count == 0: # Sécurité
+                raise ValueError("Stratégie 'one_input' mais aucun dossier d'entrée fourni.")
+            list1 = input_file_lists[0]
+            if not list1:
+                raise ValueError(f"Stratégie 'one_input' mais le dossier d'entrée '{self.input_paths[0].name}' est vide.")
+            for file_path in list1:
+                yield (file_path,) # Tuple avec un seul élément
+
+        elif self.pairing_strategy == 'zip':
+            if input_count < 2:
+                raise ValueError("La stratégie 'zip' requiert au moins 2 dossiers d'entrée.")
+            # Vérifier qu'aucune liste n'est vide (zip s'arrêterait mais c'est plus clair de prévenir)
+            if not all(input_file_lists):
+                empty_folders = [str(self.input_paths[i]) for i, lst in enumerate(input_file_lists) if not lst]
+                raise ValueError(f"Stratégie 'zip' requiert des fichiers dans tous les dossiers d'entrée. Dossiers vides: {empty_folders}")
+            yield from zip(*input_file_lists)
+
+        elif self.pairing_strategy == 'product':
+            if input_count < 1: # On peut faire le produit d'une seule liste
+                raise ValueError("La stratégie 'product' requiert au moins 1 dossier d'entrée.")
+            if not all(input_file_lists):
+                empty_folders = [str(self.input_paths[i]) for i, lst in enumerate(input_file_lists) if not lst]
+                raise ValueError(f"Stratégie 'product' requiert des fichiers dans tous les dossiers d'entrée. Dossiers vides: {empty_folders}")
+            yield from itertools.product(*input_file_lists)
+
+        elif self.pairing_strategy == 'modulo':
+            if input_count != 2:
+                raise ValueError("La stratégie 'modulo' requiert exactement 2 dossiers d'entrée.")
+            list1 = input_file_lists[0]
+            list2 = input_file_lists[1]
+            if not list1 or not list2:
+                empty_folders = []
+                if not list1: empty_folders.append(str(self.input_paths[0]))
+                if not list2: empty_folders.append(str(self.input_paths[1]))
+                raise ValueError(f"Stratégie 'modulo' requiert des fichiers dans les deux dossiers. Dossiers vides: {empty_folders}")
+
+            num_list2 = len(list2)
+            for i, path1 in enumerate(list1):
+                path2 = list2[i % num_list2]
+                yield (path1, path2)
+
+        elif self.pairing_strategy == 'custom':
+            if self.pairing_function:
+                yield from self.pairing_function(input_file_lists)
+            else:
+                raise ValueError("Fonction `pairing_function` manquante pour la stratégie 'custom'.")
+
+        else:
+            # Normalement impossible grâce à Literal et la vérif init
+            raise NotImplementedError(f"Stratégie de pairing '{self.pairing_strategy}' non implémentée.")
+
     def run(self):
-        input_path1 = Path(self.input_dirs[0])
-        input_path2 = Path(self.input_dirs[1])
-        output_path1 = Path(self.output_dirs[0])
-        output_path2 = Path(self.output_dirs[1])
+        """Exécute l'étape de traitement pour tous les éléments/paires d'entrée."""
+        self.processed_files_map = {}
+        print(f"--- Exécution Étape : {self.name} ---")
+        # print(self) # Utiliser __str__ pour afficher les détails si besoin
 
-        output_path1.mkdir(exist_ok=True)
-        output_path2.mkdir(exist_ok=True)
+        # Créer les dossiers de sortie (une seule fois au début)
+        print(f"Info [{self.name}]: Vérification/Création des dossiers de sortie...")
+        for output_path in self.output_paths:
+            try:
+                output_path.mkdir(parents=True, exist_ok=True)
+                print(f"  Sortie -> '{output_path}'")
+            except Exception as e:
+                raise IOError(f"Impossible de créer le dossier de sortie '{output_path}': {e}") from e
 
-        for file1, file2 in zip(input_path1.glob("*"), input_path2.glob("*")):
-            res1, res2 = self.process_function(file1, file2)
-            res1.save(output_path1 / file1.name)
-            res2.save(output_path2 / file2.name)
+        # 1. Lister les fichiers d'entrée
+        try:
+            input_file_lists = self._get_files_from_inputs()
+            # Vérification globale : au moins un fichier dans au moins un dossier ?
+            if not any(input_file_lists):
+                # Aucune liste ne contient de fichier
+                raise FileNotFoundError(f"Aucun fichier trouvé dans les dossiers d'entrée {[str(p) for p in self.input_paths]} pour l'étape '{self.name}'.")
+        except (FileNotFoundError, ValueError, IOError) as e:
+            # Erreur lors du listage ou dossier vide alors que requis
+            print(f"Erreur [{self.name}]: Condition préalable non remplie pour démarrer l'étape. {e}")
+            # On arrête l'étape ici
+            return
+
+        # 2. Obtenir l'itérateur d'arguments
+        try:
+            argument_iterator = self._generate_processing_args(input_file_lists)
+        except (ValueError, NotImplementedError) as e:
+            print(f"Erreur [{self.name}]: Impossible de générer les arguments pour la stratégie '{self.pairing_strategy}'. {e}")
+            return  # Arrêter l'étape
+
+        # 3. Boucle de traitement avec tqdm
+        processed_count = 0
+        errors_count = 0
+        print(f"Info [{self.name}]: Démarrage du traitement...")
+
+        # Utilisation de tqdm pour la barre de progression
+        progress_bar = tqdm(argument_iterator, desc=self.name, unit="item", smoothing=0)
+        for input_args_tuple in progress_bar:
+            try:
+                # Clé pour le suivi
+                input_key = input_args_tuple
+
+                # Appel de la fonction de traitement
+                # Elle reçoit les chemins d'entrée, les chemins de sortie, et les options
+                saved_output_paths: Optional[Union[Path, List[Path]]] = self.process_function(
+                    *input_args_tuple,              # Dépaquette les chemins d'entrée
+                    output_paths=self.output_paths, # Passe la liste des dossiers de sortie
+                    **self.process_kwargs           # Passe les options définies pour l'étape
+                )
+
+                # Vérifier le retour de la fonction de traitement
+                if saved_output_paths:
+                    # S'assurer que c'est bien Path ou List[Path] (pourrait être plus strict)
+                    if isinstance(saved_output_paths, Path) or \
+                       (isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths)):
+                        self.processed_files_map[input_key] = saved_output_paths
+                        processed_count += 1
+                    else:
+                        print(f"Avertissement [{self.name}]: Retour invalide de process_function pour {input_key} (type: {type(saved_output_paths)}). Attendu Path, List[Path] ou None.")
+                        errors_count += 1
+                else:
+                    # La fonction a retourné None (échec géré ou rien à sauvegarder)
+                    # On peut choisir de le compter comme une erreur ou non. Comptons-le.
+                    errors_count += 1
+                    # Optionnel: logger l'entrée qui n'a rien produit
+                    # print(f"Debug [{self.name}]: Aucun fichier sauvegardé pour l'entrée {input_key}")
+
+            except Exception as e_proc:
+                # Erreur inattendue DANS process_function ou lors de son appel
+                print(f"\nErreur [{self.name}]: Échec critique lors du traitement de {input_args_tuple}: {e_proc}")
+                # Afficher le traceback peut être utile pour le débogage
+                # import traceback
+                # traceback.print_exc()
+                errors_count += 1
+                # Optionnel: mettre à jour la description de tqdm
+                # progress_bar.set_postfix_str(f"Erreur sur {input_args_tuple[0].name}", refresh=True)
+
+        progress_bar.close() # Fermer proprement la barre tqdm
+
+        print(f"--- Étape {self.name} terminée ---")
+        print(f"  {processed_count} élément(s) traité(s) avec succès (fichier(s) de sortie généré(s)).")
+        if errors_count > 0:
+            print(f"  {errors_count} erreur(s) ou traitement(s) sans sortie.")
 
 
 class ProcessingPipeline:
@@ -324,33 +484,33 @@ class OverlayAndLabelStep(ProcessingStep):
 
                     saved_paths = []
                     if self.saver:
-                         # Le Saver doit être capable de gérer ce cas spécifique
-                         # On pourrait lui passer le dict entier ou les éléments séparément
-                         # Ici on suppose qu'il gère le dict comme avant, mais on vérifie les sorties
-                         temp_result_for_saver = {
-                             'image': image_data,
-                             'label': label_data,
-                             'overlay_name': overlay_path.stem # Le saver en a besoin pour le nommage
-                         }
-                         # Important: Le saver doit utiliser les bons output_dirs.
-                         # On lui passe explicitement les dossiers pour cette étape.
-                         saved_paths = self.saver.save(
-                             temp_result_for_saver,
-                             overlay_path, # L'overlay est l'input "primaire" pour le mapping
-                             [image_output_dir, label_output_dir], # Les deux sorties attendues
-                             self.name
-                         )
+                        # Le Saver doit être capable de gérer ce cas spécifique
+                        # On pourrait lui passer le dict entier ou les éléments séparément
+                        # Ici on suppose qu'il gère le dict comme avant, mais on vérifie les sorties
+                        temp_result_for_saver = {
+                            'image': image_data,
+                            'label': label_data,
+                            'overlay_name': overlay_path.stem # Le saver en a besoin pour le nommage
+                        }
+                        # Important: Le saver doit utiliser les bons output_dirs.
+                        # On lui passe explicitement les dossiers pour cette étape.
+                        saved_paths = self.saver.save(
+                            temp_result_for_saver,
+                            overlay_path, # L'overlay est l'input "primaire" pour le mapping
+                            [image_output_dir, label_output_dir], # Les deux sorties attendues
+                            self.name
+                        )
                     else:
-                         # Sauvegarde directe si pas de Saver (moins recommandé)
-                         print(f"Avertissement [{self.name}]: Aucun Saver fourni. Sauvegarde directe.")
-                         try:
-                             image_data.save(img_output_path, format='JPEG')
-                             saved_paths.append(img_output_path)
-                             with open(label_output_path, 'w', encoding='utf-8') as f:
-                                 f.write(label_data)
-                             saved_paths.append(label_output_path)
-                         except Exception as e_save:
-                             print(f"Erreur [{self.name}]: Échec sauvegarde directe pour {base_name}: {e_save}")
+                        # Sauvegarde directe si pas de Saver (moins recommandé)
+                        print(f"Avertissement [{self.name}]: Aucun Saver fourni. Sauvegarde directe.")
+                        try:
+                            image_data.save(img_output_path, format='JPEG')
+                            saved_paths.append(img_output_path)
+                            with open(label_output_path, 'w', encoding='utf-8') as f:
+                                f.write(label_data)
+                            saved_paths.append(label_output_path)
+                        except Exception as e_save:
+                            print(f"Erreur [{self.name}]: Échec sauvegarde directe pour {base_name}: {e_save}")
 
                     if len(saved_paths) == 2: # Si les deux fichiers ont été créés
                         self.processed_files_map[overlay_path] = saved_paths
@@ -375,8 +535,7 @@ class OverlayAndLabelStep(ProcessingStep):
 
             # Affichage de la progression (simple)
             if (i + 1) % 100 == 0 or (i + 1) == num_overlays:
-                 print(f"  Progression : {i + 1}/{num_overlays}")
-
+                print(f"  Progression : {i + 1}/{num_overlays}")
 
         print(f"--- Étape {self.name} terminée ---")
         print(f"  {processed_count} paires traitées et sauvegardées avec succès.")
