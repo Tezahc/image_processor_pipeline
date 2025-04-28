@@ -1,6 +1,7 @@
-from typing import Callable, Optional, Union, List
+from typing import Any, Callable, Optional, List
 from pathlib import Path
 import cv2
+import numpy as np
 from .utils import utils as u
 
 
@@ -24,6 +25,48 @@ class ProcessingStep:
     def update_options(self, **new_kwargs):
         self.process_kwargs.update(new_kwargs)
 
+    def _save_result(self, result: Any, input_file: Path) -> List[Path]:
+        saved_files = []
+        if result is None:
+            return saved_files
+        
+        if not self.output_dir:
+            print(f"Warning [{self.name}]: Aucun dossier de sortie défini pour sauvegarder le résultat de {input_file.name}.")
+            return saved_files
+        
+        output_dir = self.output_dir
+
+        try:
+            if isinstance(result, np.ndarray):
+                # Cas : Résultat unique de type OpenCV/Numpy
+                output_path = output_dir / input_file.name
+                success = cv2.imwrite(str(output_path), result)
+                if success:
+                    saved_files.append(output_path)
+                else:
+                    print(f"Erreur [{self.name}]: Échec de la sauvegarde OpenCV pour {output_path.name}")
+            
+            elif isinstance(result, dict):
+                # Cas : Dictionnaire de résultats (symétrie par ex)
+                # la clé est utilisée comme suffixe/identifiant
+                for key, img_data in result.items():
+                    # Vérifier le type de chaque élément dans le dict
+                    if isinstance(img_data, np.ndarray):
+                        output_filename = f"{input_file.name}_{key}{input_file.suffix}"
+                        output_path = output_dir / output_filename
+
+                        success = cv2.imwrite(str(output_path), img_data)
+                        if success: 
+                            saved_files.append(output_path)
+                        else:
+                            print(f"Erreur [{self.name}] : Échec de la sauvegarde OpenCV pour {output_path}")
+                    else:
+                        print(f"Warning [{self.name}] : Type non géré '{type(img_data)}' trouvé dans le dictionnaire retourne pour l'entrée {input_file.name} (clé: {key}).")
+        except Exception as e:
+            print(f"Erreur [{self.name}] : Exception lors de la tentative de sauvegarde du résultat de {input_file.name} : {e}")
+        
+        return saved_files
+
     def run(self, input_dir: Path=None):
         self.processed_files = []
         input_path = Path(input_dir or self.input_dir)
@@ -37,8 +80,10 @@ class ProcessingStep:
                 result = self.process_function(file, **self.process_kwargs)
                 if result is not None:
                     output_file = output_path / file.name
-                    cv2.imwrite(str(output_file), result) # TODO: faudra gérer l'enregistrement si la fonction utilise une autre lib (ex PIL) -> méthode save avec un case ?
-                    self.processed_files.append(output_file)
+                    saved_files = self._save_result(result, file)
+                    if saved_files:
+                        self.processed_files.append(saved_files)
+
             except Exception as e:
                 print(f"Erreur lors du traitement de {file.name}: {e}")
 
