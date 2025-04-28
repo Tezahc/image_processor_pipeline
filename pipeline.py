@@ -1,8 +1,5 @@
 from pathlib import Path
-from typing import Callable, List, Dict, Optional, Union, Tuple, Any, Iterator, Literal
-from .utils import utils as u
-import os
-import itertools
+from typing import Callable, List, Dict, Optional, Union, Tuple, Iterator, Literal
 from tqdm import tqdm
 
 
@@ -12,8 +9,9 @@ class ProcessingStep:
                  process_function: Callable,
                  input_dirs: List[Union[str, Path]],
                  output_dirs: List[Union[str, Path]],
-                 pairing_strategy: Literal['one_input', 'zip', 'product', 'modulo', 'custom'] = 'one_input',
+                 pairing_strategy: Literal['one_input', 'zip', 'modulo', 'custom'] = 'one_input',
                  pairing_function: Optional[Callable[[List[List[Path]]], Iterator[Tuple]]] = None,
+                 fixed_input: bool = False,
                  root_dir: Optional[Union[str, Path]] = None,
                  options: Optional[Dict] = None):
         """
@@ -31,24 +29,26 @@ class ProcessingStep:
             pairing_strategy (PairingStrategy): Comment combiner les fichiers des input_dirs.
                 Options: 'one_input' (défaut), 'zip', 'product', 'modulo', 'custom'.
             pairing_function (Callable): Requis si strategy='custom'. Voir doc _generate_processing_args.
+            fixed_input (Bool): TODO: ajouter description déjà écrite ailleurs...
             root_dir (Optional): Dossier racine pour résoudre les chemins relatifs.
             options (Optional[Dict]): Arguments (kwargs) additionnels passés à process_function.
         """
         self.name = name
         self.process_function = process_function
-        self.root_dir = Path(root_dir) if root_dir else Path.cwd() # Défaut CWD si non fourni
+        self.root_dir = Path(root_dir) if root_dir else Path('.')
         self.process_kwargs = options or {}
 
         # Résolution des chemins
-        self.input_paths: List[Path] = self._resolve_paths(input_dirs or [])
-        self.output_paths: List[Path] = self._resolve_paths(output_dirs)
+        self.input_paths: List[Path] = self.resolve_paths(input_dirs or [])
+        self.output_paths: List[Path] = self.resolve_paths(output_dirs)
+        self.fixed_input = fixed_input
 
         if not self.output_paths:
             raise ValueError(f"L'étape '{self.name}' doit avoir au moins un 'output_dirs' défini.")
 
         # Validation de la stratégie (sécurité runtime)
         # Note: Le type Literal fait déjà une vérification statique
-        valid_strategies = ['one_input', 'zip', 'product', 'modulo', 'custom']
+        valid_strategies = ['one_input', 'zip', 'modulo', 'custom']
         if pairing_strategy not in valid_strategies: # Vérifie si la valeur est bien une des littérales
             raise ValueError(f"Stratégie de pairing '{pairing_strategy}' invalide. Choisir parmi: {valid_strategies}")
         if pairing_strategy == 'custom' and not callable(pairing_function):
@@ -59,7 +59,7 @@ class ProcessingStep:
         # Map pour suivre les sorties générées par entrée(s)
         self.processed_files_map: Dict[Tuple[Path, ...], Union[Path, List[Path]]] = {} # Clé est tuple de Path d'entrée
 
-    def _resolve_paths(self, dir_list: List[Union[str, Path]]) -> List[Path]:
+    def resolve_paths(self, dir_list: List[Union[str, Path]]) -> List[Path]:
         """Convertit et résout les chemins par rapport au root_dir."""
         resolved = []
         for d in dir_list:
@@ -95,9 +95,7 @@ class ProcessingStep:
 
             try:
                 # Lister tous les fichiers (pas de filtrage d'extension ici) et trier
-                files = sorted([
-                    f for f in input_dir.iterdir() if f.is_file()
-                ])
+                files = sorted([f for f in input_dir.iterdir() if f.is_file()])
                 print(f"  '{input_dir.name}': {len(files)} fichier(s) trouvé(s).")
                 all_file_lists.append(files)
             except Exception as e:
@@ -109,7 +107,7 @@ class ProcessingStep:
 
         return all_file_lists
 
-    def _generate_processing_args(self, input_file_lists: List[List[Path]]) -> Iterator[Tuple[Path, ...]]:
+    def _generate_processing_inputs(self, input_file_lists: List[List[Path]]) -> Iterator[Tuple[Path, ...]]:
         """
         Génère les tuples d'arguments (chemins) pour process_function basé sur la stratégie.
 
@@ -128,25 +126,19 @@ class ProcessingStep:
             list1 = input_file_lists[0]
             if not list1:
                 raise ValueError(f"Stratégie 'one_input' mais le dossier d'entrée '{self.input_paths[0].name}' est vide.")
+
             for file_path in list1:
                 yield (file_path,) # Tuple avec un seul élément
 
         elif self.pairing_strategy == 'zip':
             if input_count < 2:
                 raise ValueError("La stratégie 'zip' requiert au moins 2 dossiers d'entrée.")
-            # Vérifier qu'aucune liste n'est vide (zip s'arrêterait mais c'est plus clair de prévenir)
+            # Vérifier qu'aucune liste n'est vide (zip s'arrêterait, mais c'est plus clair de prévenir)
             if not all(input_file_lists):
                 empty_folders = [str(self.input_paths[i]) for i, lst in enumerate(input_file_lists) if not lst]
                 raise ValueError(f"Stratégie 'zip' requiert des fichiers dans tous les dossiers d'entrée. Dossiers vides: {empty_folders}")
-            yield from zip(*input_file_lists)
 
-        elif self.pairing_strategy == 'product':
-            if input_count < 1: # On peut faire le produit d'une seule liste
-                raise ValueError("La stratégie 'product' requiert au moins 1 dossier d'entrée.")
-            if not all(input_file_lists):
-                empty_folders = [str(self.input_paths[i]) for i, lst in enumerate(input_file_lists) if not lst]
-                raise ValueError(f"Stratégie 'product' requiert des fichiers dans tous les dossiers d'entrée. Dossiers vides: {empty_folders}")
-            yield from itertools.product(*input_file_lists)
+            yield from zip(*input_file_lists)
 
         elif self.pairing_strategy == 'modulo':
             if input_count != 2:
@@ -193,8 +185,8 @@ class ProcessingStep:
         try:
             input_file_lists = self._get_files_from_inputs()
             # Vérification globale : au moins un fichier dans au moins un dossier ?
-            if not any(input_file_lists):
-                # Aucune liste ne contient de fichier
+            if not all(input_file_lists):
+                # Au moins une liste ne contient pas de fichier
                 raise FileNotFoundError(f"Aucun fichier trouvé dans les dossiers d'entrée {[str(p) for p in self.input_paths]} pour l'étape '{self.name}'.")
         except (FileNotFoundError, ValueError, IOError) as e:
             # Erreur lors du listage ou dossier vide alors que requis
@@ -204,7 +196,7 @@ class ProcessingStep:
 
         # 2. Obtenir l'itérateur d'arguments
         try:
-            argument_iterator = self._generate_processing_args(input_file_lists)
+            argument_iterator = self._generate_processing_inputs(input_file_lists)
         except (ValueError, NotImplementedError) as e:
             print(f"Erreur [{self.name}]: Impossible de générer les arguments pour la stratégie '{self.pairing_strategy}'. {e}")
             return  # Arrêter l'étape
@@ -272,7 +264,7 @@ class ProcessingPipeline:
 
     def add_step(self, step: ProcessingStep, position=None):
         # Vérification : la première étape doit avoir des inputs définis
-        if not self.steps and step.input_dir is None:
+        if not self.steps and step.input_paths is None:
             raise ValueError(f"The first step ('{step.name}') must have input_dir defined.")
             # self.steps.append(step)
             # return
@@ -284,16 +276,16 @@ class ProcessingPipeline:
             # modifie les dossiers d'input/output s'ils sont définis comme des noms de dossier ou des path relatifs
 
             # TODO: Tester ce check. Peut être pas ici puisqu'on modifie input_dir juste après
-            step.input_dir = u.check_path(step.input_dir, self.root_dir)
-            step.output_dir = u.check_path(step.output_dir, self.root_dir)
+            step.input_paths = step.resolve_paths(step.input_paths)
+            step.output_paths = step.resolve_paths(step.output_paths)
 
         if position is None or position < 0:
             previous_step = self.steps[-1] if self.steps else None
 
-            if step.input_dir is None:
+            if step.input_paths is None:
                 if previous_step is None:
-                    raise ValueError("The first step must have an input_dir defined.")
-                step.input_dir = previous_step.output_dir
+                    raise ValueError("The first step must have an input_paths defined.")
+                step.input_paths = previous_step.output_paths
 
             self.steps.append(step)
 
@@ -310,14 +302,14 @@ class ProcessingPipeline:
 
             # Définir input_dir si non défini à la création de l'étape
             if step.input_dir is None:
-                step.input_dir = previous_step.output_dir
+                step.input_dir = previous_step.output_paths
 
             # Insertion
             self.steps.insert(position, step)
 
             # Mettre à jour input_dir de la prochaine étape si elle n'est pas fixe
             if next_step and not next_step.fixed_input:
-                next_step.input_dir = step.output_dir
+                next_step.input_dir = step.output_paths
 
     def run(self, from_step_index: int = 0, only_one: bool = False):
         if from_step_index < 0 or from_step_index >= len(self.steps):
