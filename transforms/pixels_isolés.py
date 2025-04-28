@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 
 
-def keep_biggest_chunk(file: Path, min_component_size = 500):
+def keep_largest_component(file: Path, min_component_size: int = 500) -> np.ndarray:
     if file.suffix.lower() != '.png':
         raise ValueError(f"Le fichier {file.name} n'est pas un PNG.")
     
@@ -15,7 +15,6 @@ def keep_biggest_chunk(file: Path, min_component_size = 500):
     # Vérifier si l'image contient un canal alpha
     if image.shape[2] != 4:
         raise AttributeError(f"L'image {file.name} ne contient pas de canal alpha, elle sera ignorée.")
-    # TODO: ignorer réellement les erreurs afin de passer les fichiers problématiques. Peut être garder une trace dans l'orchestrateur
 
     # Extraire le canal alpha
     b, g, r, alpha = cv2.split(image)
