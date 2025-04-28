@@ -1,4 +1,4 @@
-from typing import Callable, Union, List
+from typing import Callable, Optional, Union, List
 from pathlib import Path
 import cv2
 from .utils import utils as u
@@ -60,16 +60,15 @@ class MultiInputOutputStep(ProcessingStep):
 
 
 class ProcessingPipeline:
-    def __init__(self, root_dir=None):
-        self.steps = []
+    def __init__(self, root_dir: Optional[str] = None):
+        self.steps: List[ProcessingStep] = []
         # définit le dossier source du pipeline → obligatoire ?
-        if root_dir:
-            self.root_dir = Path(root_dir)
+        self.root_dir = Path(root_dir) if root_dir else None
 
     def add_step(self, step: ProcessingStep, position=None):
-        # vérification première étape
+        # Vérification : la première étape doit avoir des inputs définis
         if not self.steps and step.input_dir is None:
-            raise ValueError("The first step must have an input_dir defined.")
+            raise ValueError(f"The first step ('{step.name}') must have input_dir defined.")
             # self.steps.append(step)
             # return
 
@@ -115,8 +114,12 @@ class ProcessingPipeline:
             if next_step and not next_step.fixed_input:
                 next_step.input_dir = step.output_dir
 
-    def run(self, from_step=0, only_one=False):
-        steps_to_do = [self.steps[from_step]] if only_one else self.steps[from_step:]
-        for i, step in enumerate(steps_to_do, start=from_step):
+    def run(self, from_step_index: int = 0, only_one: bool = False):
+        if from_step_index < 0 or from_step_index >= len(self.steps):
+            raise IndexError(f"Invalid start index {from_step_index}. Pipeline has {len(self.steps)} steps.")
+        
+        steps_to_do = [self.steps[from_step_index]] if only_one else self.steps[from_step_index:]
+        
+        for i, step in enumerate(steps_to_do, start=from_step_index):
             print(f"Running étape {i}: {step.name}")
             step.run()
