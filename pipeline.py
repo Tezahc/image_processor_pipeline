@@ -1,7 +1,7 @@
 from typing import Callable, Union, List
 from pathlib import Path
 import cv2
-import utils.utils as u
+from .utils import utils as u
 
 
 class ProcessingStep:
@@ -80,15 +80,19 @@ class ProcessingPipeline:
             # modifie les dossiers d'input/output s'ils sont définis comme des noms de dossier ou des path relatifs
 
             # TODO: Tester ce check. Peut être pas ici puisqu'on modifie input_dir juste après
-            # step.input_dir = u.check_path(step.input_dir, self.root_dir)
-            # step.output_dir = u.check_path(step.output_dir, self.root_dir)
+            step.input_dir = u.check_path(step.input_dir, self.root_dir)
+            step.output_dir = u.check_path(step.output_dir, self.root_dir)
 
         if position is None or position < 0:
-            # Ajout normal en fin de pipeline
-            previous_step = self.steps[-1]
+            previous_step = self.steps[-1] if self.steps else None
+
             if step.input_dir is None:
+                if previous_step is None:
+                    raise ValueError("The first step must have an input_dir defined.")
                 step.input_dir = previous_step.output_dir
+
             self.steps.append(step)
+
         else:
             # Insertion à une position donnée
             if position > len(self.steps):
