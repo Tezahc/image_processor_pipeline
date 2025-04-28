@@ -5,21 +5,21 @@ import cv2
 
 def compute_crop(value, total_length):
     if value < 0:
-        raise ValueError("Crop value cannot be negative")
+        raise ValueError("Les valeurs de rognage ne peuvent pas être négatives.")
     return int(total_length * value) if 0 <= value < 1 else int(value)
 
 
-def crop_from_border(filename: Path, crop_margins: Tuple[float, float, float, float] = (0, 0, 0, 0)):
+def crop_from_border(file: Path, crop_margins: Tuple[float, float, float, float] = (0, 0, 0, 0)):
     # Filtrer les fichiers .jpg
-    if filename.suffix.lower() not in ('.jpg', '.jpeg'):
-        raise ValueError(f"Le Fichier {filename.name} n'est pas du type JPG.")
+    if file.suffix.lower() not in ('.jpg', '.jpeg'):
+        raise ValueError(f"Le Fichier {file.name} n'est pas du type JPG.")
 
     crop_top, crop_bottom, crop_left, crop_right = crop_margins
 
     # lecture de l'image
-    image = cv2.imread(str(filename), cv2.IMREAD_UNCHANGED)
+    image = cv2.imread(str(file), cv2.IMREAD_UNCHANGED)
     if image is None:
-        print(f"Erreur : Impossible de charger l'image {filename}.")
+        raise FileNotFoundError(f"Impossible de charger l'image {file.name}.")
 
     # Dimensions de l'image
     height, width = image.shape[:2]
@@ -31,7 +31,7 @@ def crop_from_border(filename: Path, crop_margins: Tuple[float, float, float, fl
     crop_right_px = compute_crop(crop_right, width)
 
     if crop_top_px + crop_bottom_px >= height or crop_left_px + crop_right_px >= width:
-        raise ValueError("Les marge de rognages sont trop grandes pour l'image")
+        raise ValueError(f"Les marges de rognage sont trop grandes pour l'image {file.name}.")
 
     # Recadrage
     cropped_image = image[crop_top_px:height - crop_bottom_px, crop_left_px:width - crop_right_px]
