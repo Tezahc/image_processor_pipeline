@@ -112,7 +112,7 @@ def process_rotations(
             if rotated_image:
                 # Formatage de la clé/préfixe (ex: r001, r002...)
                 rotation_key = rotation_key_format.format(prefix=output_prefix, index=i+1)
-                output_filename_rot = f"{rotation_key}_{base_name}{out_suffix}"
+                output_filename_rot = f"{base_name}_{rotation_key}{out_suffix}"
                 output_file_path_rot = target_dir / output_filename_rot
 
                 # Sauvegarde

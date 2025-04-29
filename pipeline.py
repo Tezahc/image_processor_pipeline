@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Callable, List, Dict, Optional, Union, Tuple, Iterator, Literal
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 
 class ProcessingStep:
