@@ -6,71 +6,80 @@ import random
 
 
 
-# def generate_symmetries(file: Path, output_dir: Path) -> dict[str, np.ndarray]:
-#     # TODO: ajouter et check les vérifications suggérées par gemini (et review...)
-#     """
-#     Génère les symétries d'une image : imagee, miroir horizontal, miroir vertical,
-#     miroir horizontal + vertical (rotation 180°).
+def generate_symmetries(
+    file: Path, 
+    output_dirs: List[Path],
+    **options: Any
+) -> Optional[Path]:
+    # TODO: ajouter et check les vérifications suggérées par gemini (et review...)
+    """
+    Génère les symétries d'une image : imagee, miroir horizontal, miroir vertical,
+    miroir horizontal + vertical (rotation 180°).
     
-#     La fonction utilise OpenCV pour effectuer les flips. Elle retourne un dictionnaire 
-#     contenant les différentes versions de l'image.
+    La fonction utilise OpenCV pour effectuer les flips. Elle retourne un dictionnaire 
+    contenant les différentes versions de l'image.
 
-#     Parameters
-#     ----------
-#     file : Path
-#         Chemin du fichier image à traiter. Doit être un fichier PNG valide.
+    Parameters
+    ----------
+    file : Path
+        Chemin du fichier image à traiter. Doit être un fichier PNG valide.
 
-#     Returns
-#     -------
-#     dict[str, np.ndarray]
-#         Dictionnaire contenant les images symétriques :
-#         - "o" : Image imagee
-#         - "h" : Symétrie horizontale (flip gauche-droite)
-#         - "v" : Symétrie verticale (flip haut-bas)
-#         - "hv": Symétrie horizontale + verticale (rotation 180°)
+    Returns
+    -------
+    dict[str, np.ndarray]
+        Dictionnaire contenant les images symétriques :
+        - "o" : Image imagee
+        - "h" : Symétrie horizontale (flip gauche-droite)
+        - "v" : Symétrie verticale (flip haut-bas)
+        - "hv": Symétrie horizontale + verticale (rotation 180°)
 
-#     Raises
-#     ------
-#     ValueError
-#         Si le fichier n'est pas un PNG.
-#     FileNotFoundError
-#         Si l'image ne peut pas être chargée.
-#     """
-#     if file.suffix.lower() != '.png':
-#         raise ValueError(f"Le fichier {file.name} n'est pas un PNG.")
+    Raises
+    ------
+    ValueError
+        Si le fichier n'est pas un PNG.
+    FileNotFoundError
+        Si l'image ne peut pas être chargée.
+    """
+    if not output_dirs:
+        print(f"Erreur [{file.name} - Symétrie Aléatoire]: Aucun dossier de sortie ('output_dirs') fourni.")
+        return None
+    output_dir = output_dirs[0]
 
-#     # Lire l'image
-#     image = cv2.imread(str(file), cv2.IMREAD_UNCHANGED)
+    if file.suffix.lower() != '.png':
+        raise ValueError(f"Le fichier {file.name} n'est pas un PNG.")
 
-#     if image is None:
-#         raise FileNotFoundError(f"Impossible de charger l'image {file.name}.")
+    # Lire l'image
+    image = cv2.imread(str(file), cv2.IMREAD_UNCHANGED)
 
-#     # génération des symétries (en mémoire)
-#     symetries = {
-#         "o" : image.copy(),         # Image originale
-#         "h" : cv2.flip(image, 1),   # Symétrie horizontale 
-#         "v" : cv2.flip(image, 0),   # Symétrie verticale 
-#         "hv" : cv2.flip(image, -1), # Symétrie horizontale + verticale (équivalent à une rotation de 180°)
-#     }
+    if image is None:
+        raise FileNotFoundError(f"Impossible de charger l'image {file.name}.")
 
-#     saved_files: List[Path] = []
-#     for key, image in symetries.items():
-#         output_filename = f"{file.stem}_{key}{file.suffix}"
-#         output_path = output_dir / output_filename
+    # génération des symétries (en mémoire)
+    symetries = {
+        "o" : image.copy(),         # Image originale
+        "h" : cv2.flip(image, 1),   # Symétrie horizontale 
+        "v" : cv2.flip(image, 0),   # Symétrie verticale 
+        "hv" : cv2.flip(image, -1), # Symétrie horizontale + verticale (équivalent à une rotation de 180°)
+    }
 
-#     try:
-#         success = cv2.imwrite(str(output_path), image)
-#         if success:
-#             saved_files.append(output_path)
-#         else:
-#             # L'écriture a échoué sans lever d'exception (rare mais possible)
-#             print(f"Avertissement [{file.name} - Symétrie]: Échec de sauvegarde (imwrite a retourné False) pour {output_filename}")
-#     except Exception as e_save:
-#         # Erreur lors de l'écriture (permissions, disque plein, etc.)
-#         print(f"Erreur [{file.name} - Symétrie]: Échec de sauvegarde pour {output_filename}: {e_save}")
-#         # On continue d'essayer de sauvegarder les autres images
+    saved_files: List[Path] = []
+    for key, image in symetries.items():
+        output_filename = f"{file.stem}_{key}{file.suffix}"
+        output_path = output_dir / output_filename
+
+        try:
+            success = cv2.imwrite(str(output_path), image)
+            if success:
+                saved_files.append(output_path)
+            else:
+                # L'écriture a échoué sans lever d'exception (rare mais possible)
+                print(f"Avertissement [{file.name} - Symétrie]: Échec de sauvegarde (imwrite a retourné False) pour {output_filename}")
+        except Exception as e_save:
+            # Erreur lors de l'écriture (permissions, disque plein, etc.)
+            print(f"Erreur [{file.name} - Symétrie]: Échec de sauvegarde pour {output_filename}: {e_save}")
+            # On continue d'essayer de sauvegarder les autres images
     
-#     return saved_files
+    return saved_files
 
 
 def generate_random_symmetry(
