@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Callable, List, Dict, Optional, Union, Tuple, Iterator, Literal
 from tqdm.notebook import tqdm
+import random
 
 
 class ProcessingStep:
@@ -145,6 +146,8 @@ class ProcessingStep:
                 raise ValueError("La stratégie 'modulo' requiert exactement 2 dossiers d'entrée.")
             list1 = input_file_lists[0]
             list2 = input_file_lists[1]
+            random.shuffle(list2)
+            
             if not list1 or not list2:
                 empty_folders = []
                 if not list1: empty_folders.append(str(self.input_paths[0]))
