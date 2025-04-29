@@ -7,8 +7,8 @@ class ProcessingStep:
     def __init__(self,
                  name: str,
                  process_function: Callable,
-                 input_dirs: List[Union[str, Path]],
-                 output_dirs: List[Union[str, Path]],
+                 output_dirs: List[Union[str, Path]], #TODO: accepter un str/path en plus d'une liste de str/path => assert vers une liste d'1 élément
+                 input_dirs: List[Union[str, Path]] = None, #TODO: supprimer la mentions Union[] et changer la virgule par un pipe `|`
                  pairing_strategy: Literal['one_input', 'zip', 'modulo', 'custom'] = 'one_input',
                  pairing_function: Optional[Callable[[List[List[Path]]], Iterator[Tuple]]] = None,
                  fixed_input: bool = False,
@@ -27,7 +27,7 @@ class ProcessingStep:
             input_dirs (List): Liste des chemins des dossiers d'entrée (relatifs ou absolus).
             output_dirs (List): Liste des chemins des dossiers de sortie (relatifs ou absolus).
             pairing_strategy (PairingStrategy): Comment combiner les fichiers des input_dirs.
-                Options: 'one_input' (défaut), 'zip', 'product', 'modulo', 'custom'.
+                Options: 'one_input' (défaut), 'zip', 'modulo', 'custom'.
             pairing_function (Callable): Requis si strategy='custom'. Voir doc _generate_processing_args.
             fixed_input (Bool): TODO: ajouter description déjà écrite ailleurs...
             root_dir (Optional): Dossier racine pour résoudre les chemins relatifs.
@@ -205,19 +205,20 @@ class ProcessingStep:
         processed_count = 0
         errors_count = 0
         print(f"Info [{self.name}]: Démarrage du traitement...")
-
+        from icecream import ic
         # Utilisation de tqdm pour la barre de progression
-        progress_bar = tqdm(argument_iterator, desc=self.name, unit="item", smoothing=0)
-        for input_args_tuple in progress_bar:
+        # progress_bar = tqdm(argument_iterator, desc=self.name, unit="item", smoothing=0)
+        for input_args_tuple in argument_iterator:
             try:
                 # Clé pour le suivi
                 input_key = input_args_tuple
-
+                # ic(self.output_paths)
+                # return
                 # Appel de la fonction de traitement
                 # Elle reçoit les chemins d'entrée, les chemins de sortie, et les options
                 saved_output_paths: Optional[Union[Path, List[Path]]] = self.process_function(
                     *input_args_tuple,              # Dépaquette les chemins d'entrée
-                    output_paths=self.output_paths, # Passe la liste des dossiers de sortie
+                    output_dirs=self.output_paths,   # Passe la liste des dossiers de sortie
                     **self.process_kwargs           # Passe les options définies pour l'étape
                 )
 
@@ -248,7 +249,7 @@ class ProcessingStep:
                 # Optionnel: mettre à jour la description de tqdm
                 # progress_bar.set_postfix_str(f"Erreur sur {input_args_tuple[0].name}", refresh=True)
 
-        progress_bar.close() # Fermer proprement la barre tqdm
+        # progress_bar.close() # Fermer proprement la barre tqdm
 
         print(f"--- Étape {self.name} terminée ---")
         print(f"  {processed_count} élément(s) traité(s) avec succès (fichier(s) de sortie généré(s)).")
@@ -271,7 +272,7 @@ class ProcessingPipeline:
 
         # si un dossier racine est défini dans le pipeline, mais pas dans l'étape,
         # il est transmis à l'étape dès son ajout
-        if self.root_dir and not step.root_dir:
+        if self.root_dir: # and not step.root_dir:
             step.root_dir = self.root_dir
             # modifie les dossiers d'input/output s'ils sont définis comme des noms de dossier ou des path relatifs
 
@@ -282,7 +283,7 @@ class ProcessingPipeline:
         if position is None or position < 0:
             previous_step = self.steps[-1] if self.steps else None
 
-            if step.input_paths is None:
+            if not step.input_paths:
                 if previous_step is None:
                     raise ValueError("The first step must have an input_paths defined.")
                 step.input_paths = previous_step.output_paths
