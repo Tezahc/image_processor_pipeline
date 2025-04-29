@@ -25,7 +25,6 @@ def process_overlay_pair(
     yolo_class_id: int = 0,
     min_scale: float = 0.1,
     max_scale: float = 0.35,
-    output_format_image: str = "jpg", # Format pour l'image composite
     max_placement_attempts: int = 10, # Nombre max d'essais pour placer l'overlay
     **options: Any # Accepter d'autres options non utilisées
 ) -> Optional[List[Path]]: # Retourne une liste de 2 Path (image, label) ou None
@@ -51,7 +50,6 @@ def process_overlay_pair(
             - List[Path]: Liste contenant [chemin_image_sauvegardée, chemin_label_sauvegardé].
             - None: Si erreur (lecture, dossiers sortie insuffisants, placement impossible, sauvegarde échouée).
     """
-    ic()
     # --- 1. Vérifications Préliminaires ---
     if len(output_dirs) < 2:
         print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: "
@@ -151,28 +149,28 @@ def process_overlay_pair(
     # --- 5. Sauvegarde de l'image et du label ---
     saved_paths: List[Path] = []
     # Nom basé sur l'overlay, avec préfixe
-    out_img_suffix = f".{output_format_image.lower()}"
-    if output_format_image.lower() == "jpeg": out_img_suffix = ".jpg"
 
-    img_output_path = image_target_dir / f"{overlay_path.stem}{out_img_suffix}"
+    img_output_path = image_target_dir / f"{overlay_path.stem}{background_path.suffix}"
     label_output_path = label_target_dir / f"{overlay_path.stem}.txt"
-
+    
     try:
         # Sauvegarder l'image
-        composite_image.save(img_output_path, format=output_format_image)
+        composite_image.save(img_output_path)
         saved_paths.append(img_output_path)
-
+        
         # Sauvegarder le label
         with open(label_output_path, 'w', encoding='utf-8') as f:
             f.write(yolo_label_str)
         saved_paths.append(label_output_path)
 
-        print(f"Info [{overlay_path.name} + {background_path.name} - OverlayPair]: Image et Label sauvegardés.")
+        # print(f"Info [{overlay_path.name} + {background_path.name} - OverlayPair]: Image et Label sauvegardés.")
         # --- 6. Retourner la liste des DEUX chemins ---
         return saved_paths
 
     except Exception as e_save:
         print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: Échec lors de la sauvegarde: {e_save}")
+        import traceback
+        traceback.print_exc()
         # Nettoyer les fichiers potentiellement créés partiellement ? Optionnel.
         # Si l'image a été sauvée mais le label échoue, saved_paths contiendra 1 élément.
         # Si on veut être strict, on supprime le fichier image aussi.
