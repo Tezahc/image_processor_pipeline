@@ -2,6 +2,7 @@ import random
 from pathlib import Path
 from typing import Optional, Dict, Tuple, List, Any, Union 
 from PIL import Image, UnidentifiedImageError
+from icecream import ic
 
 
 def _convert_to_yolo_bbox(img_width: int, img_height: int, box: Tuple[int, int, int, int]) -> Tuple[float, float, float, float]:
@@ -18,7 +19,7 @@ def _convert_to_yolo_bbox(img_width: int, img_height: int, box: Tuple[int, int, 
 def process_overlay_pair(
     overlay_path: Path,
     background_path: Path,
-    output_paths: List[Path],
+    output_dirs: List[Path],
 
     # Reçoit les **options définies pour l'étape
     yolo_class_id: int = 0,
@@ -50,13 +51,14 @@ def process_overlay_pair(
             - List[Path]: Liste contenant [chemin_image_sauvegardée, chemin_label_sauvegardé].
             - None: Si erreur (lecture, dossiers sortie insuffisants, placement impossible, sauvegarde échouée).
     """
+    ic()
     # --- 1. Vérifications Préliminaires ---
-    if len(output_paths) < 2:
+    if len(output_dirs) < 2:
         print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: "
-              f"Au moins 2 dossiers de sortie sont requis (images, labels), {len(output_paths)} fourni(s).")
+              f"Au moins 2 dossiers de sortie sont requis (images, labels), {len(output_dirs)} fourni(s).")
         return None
-    image_target_dir = output_paths[0]
-    label_target_dir = output_paths[1]
+    image_target_dir = output_dirs[0]
+    label_target_dir = output_dirs[1]
 
     # --- 2. Charger overlay et background ---
     try:
