@@ -12,6 +12,7 @@ def generate_symmetries(
     **options: Any
 ) -> Optional[Path]:
     # TODO: ajouter et check les vérifications suggérées par gemini (et review...)
+    # TODO: ajouter filtre de symétries appliquées
     """
     Génère les symétries d'une image : imagee, miroir horizontal, miroir vertical,
     miroir horizontal + vertical (rotation 180°).
