@@ -1,9 +1,18 @@
 from pathlib import Path
+from typing import List
 import cv2
 import numpy as np
 
 
-def keep_largest_component(file: Path, min_component_size: int = 500) -> np.ndarray:
+def keep_largest_component(
+        file: Path, 
+        output_dirs: List[Path],
+        min_component_size: int = 500
+        ) -> np.ndarray:
+    
+    # pas de vérif et on prend le premier (et seul) élément des outputs
+    output_dir = output_dirs[0]
+
     if file.suffix.lower() != '.png':
         raise ValueError(f"Le fichier {file.name} n'est pas un PNG.")
     
@@ -48,4 +57,17 @@ def keep_largest_component(file: Path, min_component_size: int = 500) -> np.ndar
     # Recomposer l'image avec le canal alpha nettoyé
     cleaned_image = cv2.merge((b, g, r, alpha))
 
-    return cleaned_image
+    output_path = output_dir / file.name
+
+    try:
+        success = cv2.imwrite(str(output_path), cleaned_image)
+        if success:
+            return output_path
+        else:
+            # L'écriture a échoué sans lever d'exception (rare mais possible)
+            print(f"Avertissement [{file.name} - Symétrie]: Échec de sauvegarde (imwrite a retourné False) pour {output_path.name}")
+            return None
+    except Exception as e_save:
+        # Erreur lors de l'écriture (permissions, disque plein, etc.)
+        print(f"Erreur [{file.name} - Symétrie]: Échec de sauvegarde pour {output_path.name}: {e_save}")
+        return None

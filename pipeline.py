@@ -339,6 +339,9 @@ class ProcessingPipeline:
                 next_step.input_dir = step.output_paths
 
     def run(self, from_step_index: int = 0, only_one: bool = False):
+        # TODO: vérifier si un seul des dossiers d'output des étapes à run n'est pas vide => ne run pas
+        # évite les runs par accident
+        # cette vérification ne sera pas faite sur les step.run() pour permettre d'écraser
         if from_step_index < 0 or from_step_index >= len(self.steps):
             raise IndexError(f"Invalid start index {from_step_index}. Pipeline has {len(self.steps)} steps.")
         
