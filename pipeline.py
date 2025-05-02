@@ -49,7 +49,7 @@ class ProcessingStep:
 
         if not self.output_paths:
             raise ValueError(f"L'étape '{self.name}' doit avoir au moins un 'output_dirs' défini.") 
-            # et bah pas forcément ! si on écrase le fichier d'input !
+            # et bah pas forcément ! si on écrase le fichier d'input ! ->  on donne l'output = input donc pas vide ?
             # TODO: juste enlever ce check ou y'a d'autres implications ?
 
         # Validation de la stratégie (sécurité runtime) -> késako ?
@@ -106,7 +106,7 @@ class ProcessingStep:
             print(f"Avertissement [{self.name}]: Aucun dossier d'entrée défini.")
             return [] # Retourne une liste vide de listes
 
-        print(f"Info [{self.name}]: Listage des fichiers d'entrée...") # TODO : "listage" c'est moche ou c'est moi ? faire un Ctrl+F....
+        print(f"Info [{self.name}]: Récupération des chemins de fichiers d'entrée...")
         for i, input_dir in enumerate(self.input_paths):
             if not input_dir.is_dir():
                 # Lever une erreur si le dossier n'existe pas ou n'est pas un dossier
@@ -119,7 +119,7 @@ class ProcessingStep:
                 all_file_lists.append(files)
             except Exception as e:
                 # Gérer autres erreurs potentielles (ex: permissions)
-                print(f"Erreur [{self.name}]: Échec du listage de {input_dir}: {e}")
+                print(f"Erreur [{self.name}]: Échec de l'inventaire du dossier {input_dir}: {e}")
                 # On pourrait lever une erreur ici aussi, ou juste ajouter une liste vide
                 # Levons une erreur pour être strict TODO : on garde qu'un seul des deux ? print ou raise ? je penche pour raise atm
                 raise IOError(f"Impossible de lister les fichiers dans {input_dir}") from e
@@ -215,7 +215,7 @@ class ProcessingStep:
                 # Au moins une liste ne contient pas de fichier TODO: 
                 raise FileNotFoundError(f"Aucun fichier trouvé dans les dossiers d'entrée {[str(p) for p in self.input_paths]} pour l'étape '{self.name}'.")
         except (FileNotFoundError, ValueError, IOError) as e:
-            # Erreur lors du listage ou dossier vide alors que requis
+            # Erreur lors du listing ou dossier vide alors que requis
             print(f"Erreur [{self.name}]: Condition préalable non remplie pour démarrer l'étape. {e}")
             # On arrête l'étape ici
             return
