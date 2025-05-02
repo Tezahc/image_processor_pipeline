@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Callable, List, Dict, Optional, Tuple, Iterator, Literal
+from torch import Value
 from tqdm.notebook import tqdm
 import random
 
@@ -8,8 +9,8 @@ class ProcessingStep:
     def __init__(self,
                  name: str,
                  process_function: Callable,
-                 output_dirs: List[str | Path], #TODO: accepter un str/path en plus d'une liste de str/path => assert vers une liste d'1 élément
-                 input_dirs: List[str | Path] = None,
+                 input_dirs: str | Path | List[str | Path] = None,
+                 output_dirs: str | Path | List[str | Path] = None,
                  pairing_strategy: Literal['one_input', 'zip', 'modulo', 'custom'] = 'one_input',
                  pairing_function: Optional[Callable[[List[List[Path]]], Iterator[Tuple]]] = None,
                  fixed_input: bool = False,
@@ -43,7 +44,7 @@ class ProcessingStep:
 
         # Résolution des chemins
         self.input_paths: List[Path] = self._resolve_paths(input_dirs or [])
-        self.output_paths: List[Path] = self._resolve_paths(output_dirs)
+        self.output_paths: List[Path] = self._resolve_paths(output_dirs or [])
         self.fixed_input = fixed_input
 
         if not self.output_paths:
@@ -65,13 +66,19 @@ class ProcessingStep:
         # Map pour suivre les sorties générées par entrée(s)
         self.processed_files_map: Dict[Tuple[Path, ...], Path | List[Path]] = {} # Clé est tuple de Path d'entrée
 
-    def _resolve_paths(self, dir_list: List[str | Path]) -> List[Path]:
+    def _resolve_paths(self, dir_list: str | Path | List[str | Path]) -> List[Path]:
         """Convertit et résout les chemins par rapport au root_dir. 
         Chaque chemin de la liste est converti en Path.
         Si un chemin n'est pas absolu, il est considéré relatif au dossier racine."""
         # TODO: c'est ici qu'on incorpore le fixed_input ? - je pense pas, on cherche juste à générer des paths cohérents. le fixed_input intervient sur la logique de chainage
+        # assert dans une liste
+        dir_list = list(dir_list)
+
         resolved = []
         for folder in dir_list:
+            if not isinstance(folder, (str, Path)):
+                raise ValueError(f"un élément ne représente pas un dossier ou un chemin : {folder}")
+            
             dir_path = Path(folder) # Path(Path()) pose pas de problème
             # Si le chemin n'est pas absolu, on le considère relatif au root_dir
             if not dir_path.is_absolute() and self.root_dir:
