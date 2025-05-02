@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Callable, List, Dict, Optional, Union, Tuple, Iterator, Literal
+from typing import Callable, List, Dict, Optional, Tuple, Iterator, Literal
 from tqdm.notebook import tqdm
 import random
 
@@ -8,12 +8,12 @@ class ProcessingStep:
     def __init__(self,
                  name: str,
                  process_function: Callable,
-                 output_dirs: List[Union[str, Path]], #TODO: accepter un str/path en plus d'une liste de str/path => assert vers une liste d'1 élément
-                 input_dirs: List[Union[str, Path]] = None, #TODO: supprimer la mentions Union[] et changer la virgule par un pipe `|`
+                 output_dirs: List[str | Path], #TODO: accepter un str/path en plus d'une liste de str/path => assert vers une liste d'1 élément
+                 input_dirs: List[str | Path] = None,
                  pairing_strategy: Literal['one_input', 'zip', 'modulo', 'custom'] = 'one_input',
                  pairing_function: Optional[Callable[[List[List[Path]]], Iterator[Tuple]]] = None,
                  fixed_input: bool = False,
-                 root_dir: Optional[Union[str, Path]] = None,
+                 root_dir: Optional[str | Path] = None,
                  options: Optional[Dict] = None):
         """
         # TODO: rewrite et uniformiser les styles de docstring
@@ -22,7 +22,7 @@ class ProcessingStep:
         Args:
             name (str): Nom lisible de l'étape.
             process_function (Callable): La fonction qui effectue le traitement.
-                Signature attendue : (*input_paths: Path, output_paths: List[Path], **options) -> Optional[Union[Path, List[Path]]]
+                Signature attendue : (*input_paths: Path, output_paths: List[Path], **options) -> Optional[Path | List[Path]]
                 Doit accepter un nombre variable d'arguments Path en entrée (selon la stratégie),
                 la liste des chemins de sortie, et les options.
                 Doit retourner le(s) chemin(s) du/des fichier(s) sauvegardé(s), ou None si échec/rien à sauver.
@@ -63,9 +63,9 @@ class ProcessingStep:
         self.pairing_function = pairing_function
 
         # Map pour suivre les sorties générées par entrée(s)
-        self.processed_files_map: Dict[Tuple[Path, ...], Union[Path, List[Path]]] = {} # Clé est tuple de Path d'entrée
+        self.processed_files_map: Dict[Tuple[Path, ...], Path | List[Path]] = {} # Clé est tuple de Path d'entrée
 
-    def _resolve_paths(self, dir_list: List[Union[str, Path]]) -> List[Path]:
+    def _resolve_paths(self, dir_list: List[str | Path]) -> List[Path]:
         """Convertit et résout les chemins par rapport au root_dir. 
         Chaque chemin de la liste est converti en Path.
         Si un chemin n'est pas absolu, il est considéré relatif au dossier racine."""
@@ -238,7 +238,7 @@ class ProcessingStep:
                 
                 # Appel de la fonction de traitement
                 # Elle reçoit les chemins d'entrée, les chemins de sortie, et les options
-                saved_output_paths: Optional[Union[Path, List[Path]]] = self.process_function(
+                saved_output_paths: Optional[Path | List[Path]] = self.process_function(
                     *input_args_tuple,              # Dépaquette les chemins d'entrée
                     # TODO: dépaqueter aussi output_dirs (nécessite de revoir totu les fonctions...)
                     output_dirs=self.output_paths,  # Passe la liste des dossiers de sortie
