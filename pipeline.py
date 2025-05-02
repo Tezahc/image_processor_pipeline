@@ -1,37 +1,38 @@
 from pathlib import Path
 from typing import Callable, List, Dict, Optional, Tuple, Iterator, Literal
-from torch import Value
+from warnings import warn
 from tqdm.notebook import tqdm
 import random
 
 
+MODES = Literal['one_input', 'zip', 'modulo', 'custom']
 class ProcessingStep:
     def __init__(self,
                  name: str,
                  process_function: Callable,
-                 input_dirs: str | Path | List[str | Path] = None,
-                 output_dirs: str | Path | List[str | Path] = None,
-                 pairing_strategy: Literal['one_input', 'zip', 'modulo', 'custom'] = 'one_input',
+                 input_dirs: Optional[str | Path | List[str | Path]] = None,
+                 output_dirs: Optional[str | Path | List[str | Path]] = None,
+                 pairing_method: MODES = 'one_input',
                  pairing_function: Optional[Callable[[List[List[Path]]], Iterator[Tuple]]] = None,
                  fixed_input: bool = False,
                  root_dir: Optional[str | Path] = None,
                  options: Optional[Dict] = None):
         """
-        # TODO: rewrite et uniformiser les styles de docstring
+        TODO: rewrite et uniformiser les styles de docstring (numpy ou Google)
         Initialise une étape de traitement générique.
 
         Args:
             name (str): Nom lisible de l'étape.
             process_function (Callable): La fonction qui effectue le traitement.
                 Signature attendue : (*input_paths: Path, output_paths: List[Path], **options) -> Optional[Path | List[Path]]
-                Doit accepter un nombre variable d'arguments Path en entrée (selon la stratégie),
+                Doit accepter un nombre variable d'arguments Path en entrée (selon le mode),
                 la liste des chemins de sortie, et les options.
                 Doit retourner le(s) chemin(s) du/des fichier(s) sauvegardé(s), ou None si échec/rien à sauver.
             input_dirs (List): Liste des chemins des dossiers d'entrée (relatifs ou absolus).
             output_dirs (List): Liste des chemins des dossiers de sortie (relatifs ou absolus).
-            pairing_strategy (PairingStrategy): Comment combiner les fichiers des input_dirs.
+            pairing_method (PairingMethod): Comment combiner les fichiers des input_dirs.
                 Options: 'one_input' (défaut), 'zip', 'modulo', 'custom'.
-            pairing_function (Callable): Requis si strategy='custom'. Voir doc _generate_processing_args.
+            pairing_function (Callable): Requis si method='custom'. Voir doc _generate_processing_args.
             fixed_input (Bool): TODO: ajouter description déjà écrite ailleurs...
                                 TODO 2 : prendre en charge le fixed_input avec les listes de dossiers -> liste de bool ? oO
             root_dir (Optional): Dossier racine pour résoudre les chemins relatifs.
@@ -45,6 +46,8 @@ class ProcessingStep:
         # Résolution des chemins
         self.input_paths: List[Path] = self._resolve_paths(input_dirs or [])
         self.output_paths: List[Path] = self._resolve_paths(output_dirs or [])
+        # TODO: si output_dir non rempli, fallback sur input_dir (mais risque d'écraser les modifications) 
+        # OU créer un dossier du même nom que l'étape ? => vérification d'accents et replace les ` ` par `_`
         self.fixed_input = fixed_input
 
         if not self.output_paths:
@@ -52,15 +55,15 @@ class ProcessingStep:
             # et bah pas forcément ! si on écrase le fichier d'input ! ->  on donne l'output = input donc pas vide ?
             # TODO: juste enlever ce check ou y'a d'autres implications ?
 
-        # Validation de la stratégie (sécurité runtime) -> késako ?
-        # Note: Le type Literal fait déjà une vérification statique -> statique = ? TODO ouvrir un dico...
-        valid_strategies = ['one_input', 'zip', 'modulo', 'custom']
-        if pairing_strategy not in valid_strategies: # Vérifie si la valeur est bien une des littérales
-            raise ValueError(f"Stratégie de pairing '{pairing_strategy}' invalide. Choisir parmi: {valid_strategies}")
+        # Validation du mode (sécurité runtime) -> késako ?
+        # NOTE: Le type Literal fait déjà une vérification statique -> statique = ? ouvrir un dico...
+
+        if pairing_method not in MODES: # Vérifie si la valeur est bien une des littérales
+            raise ValueError(f"Mode d'appariement' '{pairing_method}' invalide. Choisir parmi: {MODES}")
         # On laisse pour avenir lointain
-        if pairing_strategy == 'custom' and not callable(pairing_function):
-            raise ValueError("Une `pairing_function` valide est requise pour la stratégie 'custom'.")
-        self.pairing_strategy = pairing_strategy
+        if pairing_method == 'custom' and not callable(pairing_function):
+            raise ValueError("Une `pairing_function` valide est requise pour le mode 'custom'.")
+        self.pairing_method = pairing_method
         self.pairing_function = pairing_function
 
         # Map pour suivre les sorties générées par entrée(s)
@@ -69,8 +72,8 @@ class ProcessingStep:
     def _resolve_paths(self, dir_list: str | Path | List[str | Path]) -> List[Path]:
         """Convertit et résout les chemins par rapport au root_dir. 
         Chaque chemin de la liste est converti en Path.
-        Si un chemin n'est pas absolu, il est considéré relatif au dossier racine."""
-        # TODO: c'est ici qu'on incorpore le fixed_input ? - je pense pas, on cherche juste à générer des paths cohérents. le fixed_input intervient sur la logique de chainage
+        Si un chemin n'est pas absolu, il est considéré relatif au dossier racine.
+        """
         # assert dans une liste
         dir_list = list(dir_list)
 
@@ -87,12 +90,12 @@ class ProcessingStep:
                 resolved.append(dir_path)
         return resolved
 
-    # TODO: Implémenter __str__ pour un résumé utile de l'étape (inputs, outputs, stratégie)
+    # TODO: Implémenter __str__ pour un résumé utile de l'étape (inputs, outputs, mode)
     def __str__(self) -> str:
         input_str = ", ".join([p.name for p in self.input_paths])
         output_str = ", ".join([p.name for p in self.output_paths])
         return (f"Étape '{self.name}':\n"
-                f"  Entrée(s) : [{input_str}] (Stratégie: {self.pairing_strategy})\n"
+                f"  Entrée(s) : [{input_str}] (Mode: {self.pairing_method})\n"
                 f"  Sortie(s) : [{output_str}]\n"
                 f"  Options   : {self.process_kwargs}")
 
@@ -100,36 +103,31 @@ class ProcessingStep:
         """Liste les fichiers de chaque dossier d'entrée. Lève une erreur si un dossier n'existe pas."""
         all_file_lists = []
         if not self.input_paths:
-            # TODO : première occurence mais valable pour tous : Utiliser des vrais warnings (module spé) 
-            # et pertinence de print (au lieu de raise) si de toute façon on peut rien faire ensuite ?? 
-            # ça va crash à l'étape suivante tfaçon (à moins de track totu les erreurs...)
-            print(f"Avertissement [{self.name}]: Aucun dossier d'entrée défini.")
-            return [] # Retourne une liste vide de listes
+            raise ValueError(f"{self.name} : Aucun dossier d'entrée défini.")
 
         print(f"Info [{self.name}]: Récupération des chemins de fichiers d'entrée...")
-        for i, input_dir in enumerate(self.input_paths):
+        for input_dir in self.input_paths:
             if not input_dir.is_dir():
-                # Lever une erreur si le dossier n'existe pas ou n'est pas un dossier
+                # Lever une erreur si le dossier n'existe pas (ou n'est pas un dossier)
                 raise FileNotFoundError(f"Le dossier d'entrée spécifié n'existe pas: '{input_dir}' pour l'étape '{self.name}'")
 
             try:
                 # Lister tous les fichiers et trier
                 files = sorted([f for f in input_dir.iterdir() if f.is_file()])
-                print(f"  '{input_dir.name}': {len(files)} fichier(s) trouvé(s).") # TODO : est ce qu'on garde vraiment tous les "(s)" ? on est *sensé* toujours en avoir plusieurs
+                # TODO : fonction utilitaire pour gérer les pluriel. (ou lib "inflect")
+                print(f"  '{input_dir.name}' : {len(files)} fichiers trouvés.") 
                 all_file_lists.append(files)
             except Exception as e:
                 # Gérer autres erreurs potentielles (ex: permissions)
-                print(f"Erreur [{self.name}]: Échec de l'inventaire du dossier {input_dir}: {e}")
-                # On pourrait lever une erreur ici aussi, ou juste ajouter une liste vide
-                # Levons une erreur pour être strict TODO : on garde qu'un seul des deux ? print ou raise ? je penche pour raise atm
-                raise IOError(f"Impossible de lister les fichiers dans {input_dir}") from e
+                raise IOError(f"Échec de l'inventaire du dossier {input_dir}") from e
 
         return all_file_lists
 
     def _generate_processing_inputs(self, input_file_lists: List[List[Path]]) -> Iterator[Tuple[Path, ...]]:
         """
-        Génère les tuples d'arguments (chemins) pour process_function basé sur la stratégie.
-        TODO : lister les stratégies disponibles avec courte description de la logique
+        Génère les tuples d'arguments (chemins) pour `process_function` basé sur le mode.
+        
+        TODO : lister les modes disponibles avec courte description de la logique
 
         Args:
             input_file_lists: Liste contenant des listes de Path, pour chaque dossier d'entrée.
@@ -146,26 +144,26 @@ class ProcessingStep:
 
         # Vérifier qu'aucune liste n'est vide (zip s'arrêterait, mais c'est plus clair de prévenir)
         if not all(input_file_lists):
-            empty_folders = [str(self.input_paths[i]) for i, lst in enumerate(input_file_lists) if not lst] # TODO : vers une petite fonction utilitaire. réutilisé au moins une fois dans run
-            raise ValueError(f"Stratégie 'zip' requiert des fichiers dans tous les dossiers d'entrée. Dossiers vides: {empty_folders}")
-
-        if self.pairing_strategy == 'one_input':
+            empty_folders = [str(self.input_paths[i]) for i, lst in enumerate(input_file_lists) if not lst] 
+            raise FileNotFoundError(f"Aucun fichier trouvé dans les dossiers d'entrée {empty_folders} pour l'étape '{self.name}'.")
+        
+        if self.pairing_method == 'one_input':
             if input_len == 0: # Sécurité
-                raise ValueError("Stratégie 'one_input' mais aucun dossier d'entrée fourni.")
+                raise ValueError("Mode 'one_input' mais aucun dossier d'entrée fourni.")
             input_files = input_file_lists[0]
 
             for file_path in input_files:
                 yield (file_path,) # Tuple avec un seul élément
 
-        elif self.pairing_strategy == 'zip':
+        elif self.pairing_method == 'zip':
             if input_len < 2:
-                raise ValueError("La stratégie 'zip' requiert au moins 2 dossiers d'entrée.")
+                raise ValueError("Le mode 'zip' requiert au moins 2 dossiers d'entrée.")
 
             yield from zip(*input_file_lists)
 
-        elif self.pairing_strategy == 'modulo':
+        elif self.pairing_method == 'modulo':
             if input_len != 2:
-                raise ValueError("La stratégie 'modulo' requiert exactement 2 dossiers d'entrée.")
+                raise ValueError("Le mode 'modulo' requiert exactement 2 dossiers d'entrée.")
             list1 = input_file_lists[0]
             list2 = input_file_lists[1]
 
@@ -177,26 +175,25 @@ class ProcessingStep:
                 path2 = list2[i % list2_len]
                 yield (path1, path2)
 
-        elif self.pairing_strategy == 'custom':
+        elif self.pairing_method == 'custom':
             if not self.pairing_function:
-                raise ValueError("Fonction `pairing_function` manquante pour la stratégie 'custom'.")
+                raise ValueError("Fonction `pairing_function` manquante pour le mode 'custom'.")
             
             yield from self.pairing_function(input_file_lists)
 
         else:
             # Normalement impossible grâce à Literal et la vérif init
-            raise NotImplementedError(f"Stratégie de pairing '{self.pairing_strategy}' non implémentée.")
+            raise NotImplementedError(f"Mode d'appariement' '{self.pairing_method}' non implémentée.")
     
-    # TODO : ROMET la fonction d'update kwargs, pourquoi elle est partie celle-là ? je pense qu'elle *pourrait* avoir son petit intérêt à l'occaz
-    # Git blame ça peut permettre de trouver ça ?
 
     def run(self):
         """Exécute l'étape de traitement pour tous les éléments/paires d'entrée."""
         self.processed_files_map = {} # Trace les résultat, y'a un truc à faire avec... un jour...
         print(f"--- Exécution Étape : {self.name} ---")
-        # print(self) # Utiliser __str__ pour afficher les détails si besoin TODO : paramètre verbose
+        # print(self) # Utiliser __str__ pour afficher les détails si besoin 
+        # TODO : paramètre verbose
 
-        # Créer les dossiers de sortie (une seule fois au début)
+        # 1. Créer les dossiers de sortie (une seule fois au début)
         print(f"Info [{self.name}]: Vérification/Création des dossiers de sortie...")
         for output_path in self.output_paths:
             try:
@@ -206,30 +203,27 @@ class ProcessingStep:
                 raise IOError(f"Impossible de créer le dossier de sortie '{output_path}': {e}") from e 
                 # raise dans un except ?
 
-        # 1. Lister les fichiers d'entrée
+        # 2. Lister les fichiers d'entrée
         try:
             input_file_lists = self._get_files_from_inputs()
-            
-            # Vérification globale : au moins un fichier dans au moins un dossier ?
-            if not all(input_file_lists):
-                # Au moins une liste ne contient pas de fichier TODO: 
-                raise FileNotFoundError(f"Aucun fichier trouvé dans les dossiers d'entrée {[str(p) for p in self.input_paths]} pour l'étape '{self.name}'.")
+        
         except (FileNotFoundError, ValueError, IOError) as e:
             # Erreur lors du listing ou dossier vide alors que requis
             print(f"Erreur [{self.name}]: Condition préalable non remplie pour démarrer l'étape. {e}")
             # On arrête l'étape ici
             return
 
-        # 2. Obtenir l'itérateur d'arguments
+        # 3. Obtenir l'itérateur d'arguments
         try:
             argument_iterator = self._generate_processing_inputs(input_file_lists)
-            # TODO et si la méthode du générateur renvoyait un tuple avec le total d'opération ? (pout tqdm tsé 👀)
+            # TODO et si le mode du générateur renvoyait un tuple avec le total d'opération ? (pout tqdm tsé 👀) 
+            # => solution : créer une classe générator qui yield comme la méthode et possède un attribut .total
         except (ValueError, NotImplementedError) as e:
-            print(f"Erreur [{self.name}]: Impossible de générer les arguments pour la stratégie '{self.pairing_strategy}'. {e}")
+            print(f"Erreur [{self.name}]: Impossible de générer les arguments pour le mode '{self.pairing_method}'. {e}")
             return  # Arrêter l'étape
 
         # --------------------------------------------------------------------------------------------
-        #                    3. Boucle de traitement (avec tqdm SoonTM tkt)
+        #                    4. Boucle de traitement (avec tqdm SoonTM tkt)
         # --------------------------------------------------------------------------------------------
         processed_count = 0
         errors_count = 0 # TODO: quid d'un dictionnaires {processed:[], errors:[]} et on a le compte avec len() ?
@@ -237,7 +231,7 @@ class ProcessingStep:
         print(f"Info [{self.name}]: Démarrage du traitement...")
     
         # Utilisation de tqdm pour la barre de progression
-        # progress_bar = tqdm(argument_iterator, desc=self.name, unit="item", smoothing=0)
+        # progress_bar = tqdm(argument_iterator, desc=self.name, unit="item", total=total_items, smoothing=0)
         for input_args_tuple in argument_iterator:
             try:
                 # Clé pour le suivi
@@ -260,10 +254,11 @@ class ProcessingStep:
                         self.processed_files_map[input_key] = saved_output_paths
                         processed_count += 1
                     else:
-                        print(f"Avertissement [{self.name}]: Retour invalide de process_function pour {input_key} (type: {type(saved_output_paths)}). Attendu Path, List[Path] ou None.")
+                        # TODO : première occurence mais valable pour tous : Utiliser des vrais warnings (module spé) 
+                        warn(f"Avertissement [{self.name}]: Retour invalide de process_function pour {input_key} (type: {type(saved_output_paths)}). Attendu Path, List[Path] ou None.")
                         errors_count += 1
                 else:
-                    # La fonction a retourné None (échec géré ou rien à sauvegarder)
+                    # La fonction de traitement a retourné None (échec géré ou rien à sauvegarder)
                     # On peut choisir de le compter comme une erreur ou non. Comptons-le.
                     errors_count += 1
                     # Optionnel: logger l'entrée qui n'a rien produit
@@ -282,9 +277,9 @@ class ProcessingStep:
         # progress_bar.close() # Fermer proprement la barre tqdm
 
         print(f"--- Étape {self.name} terminée ---") # TODO: intégrer le timings (quoique, avec tqdm.... :pray:)
-        print(f"  {processed_count} élément(s) traité(s) avec succès (fichier(s) de sortie généré(s)).")
+        print(f"  {processed_count} éléments traités avec succès (fichiers de sortie générés).")
         if errors_count > 0:
-            print(f"  {errors_count} erreur(s) ou traitement(s) sans sortie.")
+            print(f"  {errors_count} erreur(s) ou traitement(s) sans retour.")
 
 
 class ProcessingPipeline:
@@ -305,7 +300,7 @@ class ProcessingPipeline:
         if self.root_dir: # and not step.root_dir:
             step.root_dir = self.root_dir
             # modifie les dossiers d'input/output s'ils sont définis comme des noms de dossier ou des path relatifs
-
+            # TODO: gérer le fixed_input qui intervient sur la logique de chainage
             # TODO: Tester ce check. Peut être pas ici puisqu'on modifie input_dir juste après
             step.input_paths = step._resolve_paths(step.input_paths)
             step.output_paths = step._resolve_paths(step.output_paths)
