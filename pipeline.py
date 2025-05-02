@@ -5,14 +5,14 @@ from tqdm.notebook import tqdm
 import random
 
 
-MODES = Literal['one_input', 'zip', 'modulo', 'custom']
+MODES = ('one_input', 'zip', 'modulo', 'custom')
 class ProcessingStep:
     def __init__(self,
                  name: str,
                  process_function: Callable,
                  input_dirs: Optional[str | Path | List[str | Path]] = None,
                  output_dirs: Optional[str | Path | List[str | Path]] = None,
-                 pairing_method: MODES = 'one_input',
+                 pairing_method: Literal[*MODES] = 'one_input', # type: ignore
                  pairing_function: Optional[Callable[[List[List[Path]]], Iterator[Tuple]]] = None,
                  fixed_input: bool = False,
                  root_dir: Optional[str | Path] = None,
@@ -40,7 +40,7 @@ class ProcessingStep:
         """
         self.name = name # TODO: accepter le nom d'une étape lors des manipulations (insertions, ...)
         self.process_function = process_function
-        self.root_dir = Path(root_dir) if root_dir else Path('.') # TODO : Tester None au lieu de Path('.') ou même cwd() probablement encore mieux
+        self.root_dir = Path(root_dir) if root_dir else None # TODO : Tester None au lieu de Path('.') ou même cwd() probablement encore mieux
         self.process_kwargs = options or {}
 
         # Résolution des chemins
@@ -57,8 +57,7 @@ class ProcessingStep:
 
         # Validation du mode (sécurité runtime) -> késako ?
         # NOTE: Le type Literal fait déjà une vérification statique -> statique = ? ouvrir un dico...
-
-        if pairing_method not in MODES: # Vérifie si la valeur est bien une des littérales
+        if pairing_method not in set(MODES): 
             raise ValueError(f"Mode d'appariement' '{pairing_method}' invalide. Choisir parmi: {MODES}")
         # On laisse pour avenir lointain
         if pairing_method == 'custom' and not callable(pairing_function):
@@ -75,7 +74,7 @@ class ProcessingStep:
         Si un chemin n'est pas absolu, il est considéré relatif au dossier racine.
         """
         # assert dans une liste
-        dir_list = list(dir_list)
+        dir_list = [dir_list] if not isinstance(dir_list, list) else dir_list
 
         resolved = []
         for folder in dir_list:
@@ -283,21 +282,19 @@ class ProcessingStep:
 
 
 class ProcessingPipeline:
-    def __init__(self, root_dir: Optional[str] = None):
+    def __init__(self, root_dir: Optional[str | Path] = None):
         self.steps: List[ProcessingStep] = []
         # définit le dossier source du pipeline → obligatoire ?
-        self.root_dir = Path(root_dir) if root_dir else None
+        self.root_dir = Path(root_dir) if root_dir else None  # NOTE: Path.cwd() ?
 
     def add_step(self, step: ProcessingStep, position=None):
-        # Vérification : la première étape doit avoir des inputs définis
-        if not self.steps and step.input_paths is None:
-            raise ValueError(f"The first step ('{step.name}') must have input_dir defined.")
-            # self.steps.append(step)
-            # return
+        if not self.steps and not step.input_paths: 
+            # step.input_paths n'est jamais None, au minimum []
+            raise ValueError(f"La première étape ('{step.name}') doit avoir `input_dirs` définie.")
 
-        # si un dossier racine est défini dans le pipeline, mais pas dans l'étape,
+        # Si un dossier racine est défini dans le pipeline, mais pas dans l'étape,
         # il est transmis à l'étape dès son ajout
-        if self.root_dir: # and not step.root_dir:
+        if self.root_dir and not step.root_dir:
             step.root_dir = self.root_dir
             # modifie les dossiers d'input/output s'ils sont définis comme des noms de dossier ou des path relatifs
             # TODO: gérer le fixed_input qui intervient sur la logique de chainage
@@ -308,12 +305,11 @@ class ProcessingPipeline:
         # Ajout de l'étape en dernière position (défaut)
         if position is None or position < 0:
             previous_step = self.steps[-1] if self.steps else None
-
-            # chaînage des dossiers d'output deviennent l'input des suivant
+            # chaînage des dossiers d'output : deviennent l'input des suivants
             # TODO gérer avec les listes d'input/output => méthode dédiée
             if not step.input_paths:
-                if previous_step is None:
-                    raise ValueError("The first step must have an input_paths defined.")
+                if previous_step is None: # jamais ?
+                    raise ValueError(f"Previous step is not defined. {previous_step}")
                 step.input_paths = previous_step.output_paths
 
             self.steps.append(step)
