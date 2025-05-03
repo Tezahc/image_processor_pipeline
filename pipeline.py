@@ -292,49 +292,47 @@ class ProcessingPipeline:
             # step.input_paths n'est jamais None, au minimum []
             raise ValueError(f"La première étape ('{step.name}') doit avoir `input_dirs` définie.")
 
-        # Si un dossier racine est défini dans le pipeline, mais pas dans l'étape,
-        # il est transmis à l'étape dès son ajout
+        # Si un dossier racine est défini dans le pipeline, mais pas dans l'étape :
+        # il est transmis à l'étape dès son ajout sans l'écraser
         if self.root_dir and not step.root_dir:
             step.root_dir = self.root_dir
-            # modifie les dossiers d'input/output s'ils sont définis comme des noms de dossier ou des path relatifs
-            # TODO: gérer le fixed_input qui intervient sur la logique de chainage
-            # TODO: Tester ce check. Peut être pas ici puisqu'on modifie input_dir juste après
+            # réévalue les chemins suite à la modification (éventuelle) du root_dir
             step.input_paths = step._resolve_paths(step.input_paths)
             step.output_paths = step._resolve_paths(step.output_paths)
 
-        # Ajout de l'étape en dernière position (défaut)
-        if position is None or position < 0:
-            previous_step = self.steps[-1] if self.steps else None
-            # chaînage des dossiers d'output : deviennent l'input des suivants
-            # TODO gérer avec les listes d'input/output => méthode dédiée
-            if not step.input_paths:
-                if previous_step is None: # jamais ?
-                    raise ValueError(f"Previous step is not defined. {previous_step}")
-                step.input_paths = previous_step.output_paths
-
-            self.steps.append(step)
-
-        else:
-            # Insertion à une position donnée
-            if position > len(self.steps):
-                raise IndexError("Invalid position to insert step.")
-
+        # Si pas précisé, on assert position à la dernière étape (volontairement = len(steps) donc out of index)
+        position = len(self.steps) if position is None else position
+        
+        # Si l'étape ajoutée n'a pas d'input, on a forcément au moins une étape dans le pipeline
+        # on veut chainer les outputs précédents dans l'input actuel
+        if not step.input_paths:
             if position == 0:
-                raise ValueError("Cannot insert at position 0. Input_dir must be set manually for the first step.")
+                raise IndexError(f"Insertion en première position, impossible de déduire les dossiers d'input pour {step.name}")
+            
+            # Tous les cas problèmatiques tombent dans un out of index ou sont exclus par le check pos==0
+            try:
+                previous_step: ProcessingStep = self.steps[position - 1]
+                # tant que l'étape est ajoutée à un autre point que la fin, on aura forcément une étape suivante
+                next_step: ProcessingStep= self.steps[position] if position < len(self.steps) else None
 
-            previous_step = self.steps[position - 1]
-            next_step = self.steps[position] if position < len(self.steps) else None
+                # === CHAINAGE ===
+                # si on arrive ici, toutes les exceptions sont déjà élevées. Pas de risque de modification de la pipeline malgré une blocage ensuite
+                step.input_paths = previous_step.output_paths
+                if next_step and not next_step.fixed_input:
+                    # TODO : gérer les fixed_input en cas de len(input) > 1
+                    next_step.input_paths = step.output_paths
 
-            # Définir input_dir si non défini à la création de l'étape
-            if step.input_dir is None:
-                step.input_dir = previous_step.output_paths
+            except IndexError as idx:
+                raise ValueError(f"Position d'insertion invalide pour déduire les dossiers d'input de {step.name}.") from idx
+            except Exception as e:
+                raise RuntimeError(f"Erreur innatendue pour l'ajout de {step.name}") from e
+        
+        else:
+            # on rentre si c'est la première étape (input_dirs *est* défini)
+            pass
 
-            # Insertion
-            self.steps.insert(position, step)
-
-            # Mettre à jour input_dir de la prochaine étape si elle n'est pas fixe
-            if next_step and not next_step.fixed_input:
-                next_step.input_dir = step.output_paths
+        # === AJOUT DE L'ETAPE ===
+        self.steps.insert(position, step)
 
     def run(self, from_step_index: int = 0, only_one: bool = False):
         # TODO: vérifier si un seul des dossiers d'output des étapes à run n'est pas vide => ne run pas
