@@ -38,16 +38,18 @@ class ProcessingStep:
             root_dir (Optional): Dossier racine pour résoudre les chemins relatifs.
             options (Optional[Dict]): Arguments (kwargs) additionnels passés à process_function.
         """
-        self.name = name # TODO: accepter le nom d'une étape lors des manipulations (insertions, ...)
+        # TODO: accepter le nom d'une étape lors des manipulations (insertions, ...)
+        self.name = name 
         self.process_function = process_function
-        self.root_dir = Path(root_dir) if root_dir else None # TODO : Tester None au lieu de Path('.') ou même cwd() probablement encore mieux
+        # TODO : Tester None au lieu de Path('.') ou même cwd() probablement encore mieux
+        self.root_dir = Path(root_dir) if root_dir else None 
         self.process_kwargs = options or {}
 
         # Résolution des chemins
         self.input_paths: List[Path] = self._resolve_paths(input_dirs or [])
         self.output_paths: List[Path] = self._resolve_paths(output_dirs or [])
-        # TODO: si output_dir non rempli, fallback sur input_dir (mais risque d'écraser les modifications) 
-        # OU créer un dossier du même nom que l'étape ? => vérification d'accents et replace les ` ` par `_`
+        # TODO: si output_dir non rempli, créer un dossier du même nom que l'étape ? 
+        # => vérification d'accents et replace les ` ` par `_`
         self.fixed_input = fixed_input
 
         if not self.output_paths:
@@ -200,7 +202,6 @@ class ProcessingStep:
                 print(f"  Sortie -> '{output_path}'")
             except Exception as e:
                 raise IOError(f"Impossible de créer le dossier de sortie '{output_path}': {e}") from e 
-                # raise dans un except ?
 
         # 2. Lister les fichiers d'entrée
         try:
@@ -209,7 +210,6 @@ class ProcessingStep:
         except (FileNotFoundError, ValueError, IOError) as e:
             # Erreur lors du listing ou dossier vide alors que requis
             print(f"Erreur [{self.name}]: Condition préalable non remplie pour démarrer l'étape. {e}")
-            # On arrête l'étape ici
             return
 
         # 3. Obtenir l'itérateur d'arguments
@@ -219,13 +219,14 @@ class ProcessingStep:
             # => solution : créer une classe générator qui yield comme la méthode et possède un attribut .total
         except (ValueError, NotImplementedError) as e:
             print(f"Erreur [{self.name}]: Impossible de générer les arguments pour le mode '{self.pairing_method}'. {e}")
-            return  # Arrêter l'étape
+            return
 
         # --------------------------------------------------------------------------------------------
         #                    4. Boucle de traitement (avec tqdm SoonTM tkt)
         # --------------------------------------------------------------------------------------------
+        # TODO: quid d'un dictionnaires {processed:[], errors:[]} et on a le compte avec len() ?
         processed_count = 0
-        errors_count = 0 # TODO: quid d'un dictionnaires {processed:[], errors:[]} et on a le compte avec len() ?
+        errors_count = 0 
 
         print(f"Info [{self.name}]: Démarrage du traitement...")
     
@@ -275,7 +276,8 @@ class ProcessingStep:
 
         # progress_bar.close() # Fermer proprement la barre tqdm
 
-        print(f"--- Étape {self.name} terminée ---") # TODO: intégrer le timings (quoique, avec tqdm.... :pray:)
+        # TODO: intégrer le timings (quoique, avec tqdm.... :pray:)
+        print(f"--- Étape {self.name} terminée ---") 
         print(f"  {processed_count} éléments traités avec succès (fichiers de sortie générés).")
         if errors_count > 0:
             print(f"  {errors_count} erreur(s) ou traitement(s) sans retour.")
@@ -285,7 +287,7 @@ class ProcessingPipeline:
     def __init__(self, root_dir: Optional[str | Path] = None):
         self.steps: List[ProcessingStep] = []
         # définit le dossier source du pipeline → obligatoire ?
-        self.root_dir = Path(root_dir) if root_dir else None  # NOTE: Path.cwd() ?
+        self.root_dir = Path(root_dir) if root_dir else None # Path.cwd() ?
 
     def add_step(self, step: ProcessingStep, position=None):
         if not self.steps and not step.input_paths: 
