@@ -9,8 +9,26 @@ def change_label_class(input_path: Path,
                        new_label_class_id: int = 0,
                        **options: Any
                        ) -> Optional[Path]:
-    """
-    Docstring
+    """Change l'id de classe d'un fichier label (format yolo)
+
+    Parameters
+    ----------
+    input_path : Path
+        Chemin du fichier label à modifier.  
+        Ne fonctionne qu'avec un format YOLO : "class_id x_min y_min x_max y_max"
+    output_dirs : List[Path]
+        Liste (un seul élément attendu) du chemin de dossier d'enregistrement.  
+        NOTE : actuellement totalement ignoré, écrase le fichier d'entrée
+    new_label_class_id : int, optional
+        id de la classe à remplacer, by default 0
+
+    TODO : ajouter un filtre pour ne remplacer que cette classe d'origine
+    TODO : gérer multiples bbox (lignes). (actuellement, seulement la première ligne)
+
+    Returns
+    -------
+    Optional[Path]
+        Renvoie le chemin du fichier modifié. None s'il y a eu un problème.
     """
 
     # Vérifications : 
