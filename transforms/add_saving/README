@@ -1,0 +1,4 @@
+Fonctions déjà unitaires (atomisées 🤡)
+
+Reste à ajouter la fonctionnalité d'enregistrement
+*à noter que peut être on finira par rollback et externaliser cette partie par l'orchestrateur*
