@@ -6,12 +6,13 @@ from typing import Any, List, Literal, Optional, Tuple
 from warnings import warn
 
 
+SYMS = ('o', 'h', 'v', 'hv')
 def generate_symmetries(
     file: Path, 
     output_dirs: List[Path],
+    pool: Optional[List[Literal[*SYMS]]] = None, # type: ignore
     choose_random: Optional[int] = None,
     include_original: bool = True,
-    pool: Optional[List[Literal['o', 'h', 'v', 'hv']]] = None,
     **options: Any
 ) -> Optional[Path]:
     # TODO: ajouter et check les vérifications suggérées par gemini (et review...)
@@ -49,7 +50,7 @@ def generate_symmetries(
         - Si False et `pool` ne contient pas 'o'  
             uniquement les transformations restantes dans pool sont produites et transmises.  
         - Si True et `pool` inclue 'o'  
-            BUG peut produire (au hasard) une originale ET une copie dans les résultats.  
+            BUG potentiellement moins d'images qu'attendu => warning "peut être virer le 'o' du pool ?"
         - Si True et `pool` ne contient pas 'o' (désiré)  
             choisi au hasard une orientation parmi pool et ajoute une copie originale.  
         Par défaut True  
@@ -84,19 +85,38 @@ def generate_symmetries(
         # Peut être ouvrir à tout type d'image ?
         raise ValueError(f"Le fichier {file.name} n'est pas un PNG.")
 
+    pool = pool if pool else list(SYMS)
+    # pool = list(SYMS) if not pool else pool ?
+    if any(transform not in SYMS for transform in pool):
+        raise ValueError("`pool` contient des éléments interdits")
+
+    if choose_random and choose_random >= len(pool):
+        warn(f"Choix aléatoire de plus d'éléments ({choose_random}) que possible parmis {pool} ({len(pool)}).")
+    
     # Lire l'image
     image = cv2.imread(str(file), cv2.IMREAD_UNCHANGED)
 
     if image is None:
         raise FileNotFoundError(f"Impossible de charger l'image {file.name}.")
-
-    # Génération des symétries (en mémoire)
-    symmetries = {
-        "o" : image.copy(),         # Image originale
-        "h" : cv2.flip(image, 1),   # Symétrie horizontale 
-        "v" : cv2.flip(image, 0),   # Symétrie verticale 
-        "hv" : cv2.flip(image, -1), # Symétrie h + v (rotation 180°)
+    
+    # Dictionnaire de fonctions génératrices de symétries
+    sym_generators = {
+        "o" : lambda img: img.copy(),         # Image originale
+        "h" : lambda img: cv2.flip(img, 1),   # Symétrie horizontale 
+        "v" : lambda img: cv2.flip(img, 0),   # Symétrie verticale 
+        "hv" : lambda img: cv2.flip(img, -1), # Symétrie h + v (rotation 180°)
     }
+
+    symmetries = {}
+    random.shuffle(pool)
+    # HACK: zip permet de s'arrêter soit dès que la pool est finie soit dès que le nombre de pick rng est atteint
+    for sym, rng in zip(pool, range(choose_random)):
+        # Application de la symétrie
+        symmetries[sym] = sym_generators[sym](image)
+    
+    # Ajout de l'original (peut déjà être présent par le for)
+    if include_original and 'o' not in set(symmetries.keys()):
+        symmetries['o'] = sym_generators["o"](image)
 
     # Sauvegarde des images générés
     saved_files: List[Path] = []
@@ -118,81 +138,3 @@ def generate_symmetries(
             # On continue d'essayer de sauvegarder les autres images
     
     return saved_files
-
-
-def generate_random_symmetry(
-    input_path: Path,
-    output_dirs: List[Path],
-    **options: Any
-) -> Optional[Path]: # Retourne un seul Path ou None
-    """
-    Génère et SAUVEGARDE une symétrie aléatoire d'une image.
-
-    Choisit aléatoirement parmi : originale, symétrie horizontale (H),
-    symétrie verticale (V), ou H+V (rotation 180°). Sauvegarde
-    l'image résultante dans le premier dossier de sortie (`output_paths[0]`)
-    en ajoutant le suffixe correspondant (_o, _h, _v, _hv) au nom original.
-
-    Args:
-        input_path (Path): Chemin du fichier image à traiter.
-        output_paths (List[Path]): Liste des chemins des dossiers de sortie configurés.
-                                   Le premier dossier (output_paths[0]) sera utilisé.
-        **options (Any): Accepte des options supplémentaires (non utilisées ici).
-
-    Returns:
-        Optional[Path]:
-            - Path: Le chemin complet vers le fichier unique sauvegardé.
-            - None: Si l'image d'entrée ne peut pas être lue, si aucun dossier de sortie
-                    n'est fourni, ou si la sauvegarde échoue.
-    """
-    # --- 1. Vérifications Préliminaires ---
-    if not output_dirs:
-        print(f"Erreur [{input_path.name} - Symétrie Aléatoire]: Aucun dossier de sortie ('output_dir') fourni.")
-        return None
-    output_dir = output_dirs[0]
-
-    # --- 2. Lecture de l'image d'entrée ---
-    try:
-        image = cv2.imread(str(input_path), cv2.IMREAD_UNCHANGED)
-        if image is None:
-            print(f"Erreur [{input_path.name} - Symétrie Aléatoire]: Impossible de charger l'image.")
-            return None
-    except Exception as e:
-        print(f"Erreur [{input_path.name} - Symétrie Aléatoire]: Échec lors de la lecture du fichier: {e}")
-        return None
-
-    # --- 3. Choix aléatoire de l'orientation ---
-    # pas de calcul ici car lambda !
-    orientations = {
-        "o": lambda img: img.copy(),        # Originale
-        "h": lambda img: cv2.flip(img, 1),  # Horizontale
-        "v": lambda img: cv2.flip(img, 0),  # Verticale
-        "hv": lambda img: cv2.flip(img, -1) # H+V
-    }
-    chosen_key = random.choice(list(orientations.keys()))
-    chosen_function = orientations[chosen_key]
-
-    # --- 4. Génération de l'image choisie ---
-    try:
-        output_image = chosen_function(image)
-        # print(f"Info [{input_path.name} - Symétrie Aléatoire]: Orientation choisie: '{chosen_key}'")
-    except Exception as e:
-         print(f"Erreur [{input_path.name} - Symétrie Aléatoire]: Échec lors de la génération du flip '{chosen_key}': {e}")
-         return None
-
-    # --- 5. Sauvegarde de l'image unique ---
-    output_filename = f"{input_path.stem}_{chosen_key}{input_path.suffix}"
-    output_file_path = output_dir / output_filename
-
-    try:
-        success = cv2.imwrite(str(output_file_path), output_image)
-
-        if success:
-            # --- 6. Retourner le chemin unique sauvegardé ---
-            return output_file_path
-        else:
-            print(f"Avertissement [{input_path.name} - Symétrie Aléatoire]: Échec de sauvegarde (imwrite a retourné False) pour {output_filename}")
-            return None
-    except Exception as e_save:
-        print(f"Erreur [{input_path.name} - Symétrie Aléatoire]: Échec de sauvegarde pour {output_filename}: {e_save}")
-        return None
