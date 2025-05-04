@@ -1,35 +1,70 @@
-from pathlib import Path
-from typing import Any, List, Optional, Tuple
 import cv2
-import numpy as np
 import random
-
+import numpy as np
+from pathlib import Path
+from typing import Any, List, Literal, Optional, Tuple
+from warnings import warn
 
 
 def generate_symmetries(
     file: Path, 
     output_dirs: List[Path],
+    choose_random: Optional[int] = None,
+    include_original: bool = True,
+    pool: Optional[List[Literal['o', 'h', 'v', 'hv']]] = None,
     **options: Any
 ) -> Optional[Path]:
     # TODO: ajouter et check les vérifications suggérées par gemini (et review...)
     # TODO: ajouter filtre de symétries appliquées
     """
-    Génère les symétries d'une image : imagee, miroir horizontal, miroir vertical,
-    miroir horizontal + vertical (rotation 180°).
+    Génère les symétries d'une image :
     
-    La fonction utilise OpenCV pour effectuer les flips. Elle retourne un dictionnaire 
-    contenant les différentes versions de l'image.
+    - `o` image originale 
+    - `h` miroir horizontal 
+    - `v` miroir vertical 
+    - `hv` miroir horizontal + vertical (rotation 180°)
+    
+    La fonction utilise OpenCV pour effectuer les flips. FIXME Elle retourne un dictionnaire 
+    contenant les différentes versions de l'image.  
+    Elle sauvegarde les 4 images résultantes dans le premier dossier de sortie
+    fourni (`output_paths[0]`), en ajoutant un suffixe (_o, _h, _v, _hv)
+    au nom du fichier original.
 
     Parameters
     ----------
     file : Path
-        Chemin du fichier image à traiter. Doit être un fichier PNG valide.
-
+        Chemin de l'image à traiter. Doit être un fichier PNG valide.
+    output_dirs : List[Path]
+        Chemin du dossier de sortie. Liste d'un seul élément attendue. 
+        *Les éventuels éléments supplémentaires seront ignorés.*
+    choose_random : int, optional
+        Les symétries générées sont choisies au hasard parmi les options de `pool`. 
+        `choose_random` symétries sont créées. Doit être < len(pool)
+        Par défaut None
+    include_original : bool, optional
+        Définit si l'orientation originale doit être inclue systématiquement dans les résultats.  
+        Indépendant de `pool`. Ignoré si `choose_random` est `None`  
+        - Si False et `pool` inclue 'o'  
+            peut quand même produire (au hasard) une image originale dans les résultats.  
+        - Si False et `pool` ne contient pas 'o'  
+            uniquement les transformations restantes dans pool sont produites et transmises.  
+        - Si True et `pool` inclue 'o'  
+            BUG peut produire (au hasard) une originale ET une copie dans les résultats.  
+        - Si True et `pool` ne contient pas 'o' (désiré)  
+            choisi au hasard une orientation parmi pool et ajoute une copie originale.  
+        Par défaut True  
+    pool : List[Literal['o', 'h', 'v', 'hv']], optional
+        Liste des symétries applicables. Si non renseigné, toutes les symétries sont sélectionées
+        , par défaut None
+    **options : Any
+        Accepte des options supplémentaires (ne seront pas utilisées).
+    
     Returns
     -------
-    dict[str, np.ndarray]
-        Dictionnaire contenant les images symétriques :
-        - "o" : Image imagee
+    FIXME
+    dict[str, Path]
+        Dictionnaire contenant les chemins des images symétriques générées :
+        - "o" : Image originale
         - "h" : Symétrie horizontale (flip gauche-droite)
         - "v" : Symétrie verticale (flip haut-bas)
         - "hv": Symétrie horizontale + verticale (rotation 180°)
@@ -42,11 +77,11 @@ def generate_symmetries(
         Si l'image ne peut pas être chargée.
     """
     if not output_dirs:
-        print(f"Erreur [{file.name} - Symétrie Aléatoire]: Aucun dossier de sortie ('output_dirs') fourni.")
-        return None
+        raise ValueError(f"Erreur [{file.name} - Symétrie]: Aucun dossier de sortie ('output_dirs') fourni.")
     output_dir = output_dirs[0]
 
     if file.suffix.lower() != '.png':
+        # Peut être ouvrir à tout type d'image ?
         raise ValueError(f"Le fichier {file.name} n'est pas un PNG.")
 
     # Lire l'image
@@ -55,18 +90,19 @@ def generate_symmetries(
     if image is None:
         raise FileNotFoundError(f"Impossible de charger l'image {file.name}.")
 
-    # génération des symétries (en mémoire)
-    symetries = {
+    # Génération des symétries (en mémoire)
+    symmetries = {
         "o" : image.copy(),         # Image originale
         "h" : cv2.flip(image, 1),   # Symétrie horizontale 
         "v" : cv2.flip(image, 0),   # Symétrie verticale 
-        "hv" : cv2.flip(image, -1), # Symétrie horizontale + verticale (équivalent à une rotation de 180°)
+        "hv" : cv2.flip(image, -1), # Symétrie h + v (rotation 180°)
     }
 
+    # Sauvegarde des images générés
     saved_files: List[Path] = []
-    for key, image in symetries.items():
-        output_filename = f"{file.stem}_{key}{file.suffix}"
-        output_path = output_dir / output_filename
+    for suffix, image in symmetries.items():
+        output_filename = file.with_stem(f"{file.stem}_{suffix}")
+        output_path = output_dir / output_filename.name
 
         try:
             success = cv2.imwrite(str(output_path), image)
@@ -74,10 +110,11 @@ def generate_symmetries(
                 saved_files.append(output_path)
             else:
                 # L'écriture a échoué sans lever d'exception (rare mais possible)
-                print(f"Avertissement [{file.name} - Symétrie]: Échec de sauvegarde (imwrite a retourné False) pour {output_filename}")
+                # jamais du coup ?
+                warn(f"Échec de sauvegarde de lq symétrie '{suffix}' pour {output_path.name}. Retour False depuis `imwrite`") 
         except Exception as e_save:
             # Erreur lors de l'écriture (permissions, disque plein, etc.)
-            print(f"Erreur [{file.name} - Symétrie]: Échec de sauvegarde pour {output_filename}: {e_save}")
+            print(f"Erreur [{file.name} - Symétrie '{suffix}']: Échec de sauvegarde pour {output_filename} : {e_save}.")
             # On continue d'essayer de sauvegarder les autres images
     
     return saved_files
