@@ -4,15 +4,16 @@ from warnings import warn
 from tqdm.notebook import tqdm
 import random
 
-
 MODES = ('one_input', 'zip', 'modulo', 'custom')
+
+
 class ProcessingStep:
     def __init__(self,
                  name: str,
                  process_function: Callable,
                  input_dirs: Optional[str | Path | List[str | Path]] = None,
                  output_dirs: Optional[str | Path | List[str | Path]] = None,
-                 pairing_method: Literal[*MODES] = 'one_input', # type: ignore
+                 pairing_method: Literal[*MODES] = 'one_input',  # type: ignore
                  pairing_function: Optional[Callable[[List[List[Path]]], Iterator[Tuple]]] = None,
                  fixed_input: bool = False,
                  root_dir: Optional[str | Path] = None,
@@ -58,7 +59,7 @@ class ProcessingStep:
             # TODO: juste enlever ce check ou y'a d'autres implications ?
 
         # Validation du mode (sécurité runtime) -> késako ?
-        # NOTE: Le type Literal fait déjà une vérification statique -> statique = ? ouvrir un dico...
+        # NOTE: Le type Literal fait déjà une vérification statique → statique = ? ouvrir un dico...
         if pairing_method not in set(MODES): 
             raise ValueError(f"Mode d'appariement' '{pairing_method}' invalide. Choisir parmi: {MODES}")
         # On laisse pour avenir lointain
@@ -68,7 +69,7 @@ class ProcessingStep:
         self.pairing_function = pairing_function
 
         # Map pour suivre les sorties générées par entrée(s)
-        self.processed_files_map: Dict[Tuple[Path, ...], Path | List[Path]] = {} # Clé est tuple de Path d'entrée
+        self.processed_files_map: Dict[Tuple[Path, ...], Path | List[Path]] = {}  # Clé est tuple de Path d'entrée
 
     def _resolve_paths(self, dir_list: str | Path | List[str | Path]) -> List[Path]:
         """Convertit et résout les chemins par rapport au root_dir. 
@@ -83,7 +84,7 @@ class ProcessingStep:
             if not isinstance(folder, (str, Path)):
                 raise ValueError(f"un élément ne représente pas un dossier ou un chemin : {folder}")
             
-            dir_path = Path(folder) # Path(Path()) pose pas de problème
+            dir_path = Path(folder)  # Path(Path()) pose pas de problème
             # Si le chemin n'est pas absolu, on le considère relatif au root_dir
             if not dir_path.is_absolute() and self.root_dir:
                 resolved.append(self.root_dir / dir_path)
@@ -149,12 +150,12 @@ class ProcessingStep:
             raise FileNotFoundError(f"Aucun fichier trouvé dans les dossiers d'entrée {empty_folders} pour l'étape '{self.name}'.")
         
         if self.pairing_method == 'one_input':
-            if input_len == 0: # Sécurité
+            if input_len == 0:  # Sécurité
                 raise ValueError("Mode 'one_input' mais aucun dossier d'entrée fourni.")
             input_files = input_file_lists[0]
 
             for file_path in input_files:
-                yield (file_path,) # Tuple avec un seul élément
+                yield (file_path,)  # Tuple avec un seul élément
 
         elif self.pairing_method == 'zip':
             if input_len < 2:
@@ -185,11 +186,10 @@ class ProcessingStep:
         else:
             # Normalement impossible grâce à Literal et la vérif init
             raise NotImplementedError(f"Mode d'appariement' '{self.pairing_method}' non implémentée.")
-    
 
     def run(self):
         """Exécute l'étape de traitement pour tous les éléments/paires d'entrée."""
-        self.processed_files_map = {} # Trace les résultat, y'a un truc à faire avec... un jour...
+        self.processed_files_map = {}  # Trace les résultats, y'a un truc à faire avec... un jour...
         print(f"--- Exécution Étape : {self.name} ---")
         # print(self) # Utiliser __str__ pour afficher les détails si besoin 
         # TODO : paramètre verbose
@@ -254,7 +254,7 @@ class ProcessingStep:
                         self.processed_files_map[input_key] = saved_output_paths
                         processed_count += 1
                     else:
-                        # TODO : première occurence mais valable pour tous : Utiliser des vrais warnings (module spé) 
+                        # TODO: première occurrence mais valable pour tous : Utiliser des vrais warnings (module spé)
                         warn(f"Avertissement [{self.name}]: Retour invalide de process_function pour {input_key} (type: {type(saved_output_paths)}). Attendu Path, List[Path] ou None.")
                         errors_count += 1
                 else:
@@ -262,7 +262,7 @@ class ProcessingStep:
                     # On peut choisir de le compter comme une erreur ou non. Comptons-le.
                     errors_count += 1
                     # Optionnel: logger l'entrée qui n'a rien produit
-                    # print(f"Debug [{self.name}]: Aucun fichier sauvegardé (=> renvoyé) pour l'entrée {input_key}")
+                    # print(f"Debug [{self.name}]: Aucun fichier sauvegardé (→ renvoyé) pour l'entrée {input_key}")
 
             except Exception as e_proc:
                 # Erreur inattendue DANS process_function ou lors de son appel
@@ -287,7 +287,7 @@ class ProcessingPipeline:
     def __init__(self, root_dir: Optional[str | Path] = None):
         self.steps: List[ProcessingStep] = []
         # définit le dossier source du pipeline → obligatoire ?
-        self.root_dir = Path(root_dir) if root_dir else None # Path.cwd() ?
+        self.root_dir = Path(root_dir) if root_dir else None  # Path.cwd() ?
 
     def add_step(self, step: ProcessingStep, position=None):
         if not self.steps and not step.input_paths: 
@@ -305,20 +305,20 @@ class ProcessingPipeline:
         # Si pas précisé, on assert position à la dernière étape (volontairement = len(steps) donc out of index)
         position = len(self.steps) if position is None else position
         
-        # Si l'étape ajoutée n'a pas d'input, on a forcément au moins une étape dans le pipeline
+        # Si l'étape ajoutée n'a pas d'input, on a forcément au moins une étape dans le pipeline,
         # on veut chainer les outputs précédents dans l'input actuel
         if not step.input_paths:
             if position == 0:
                 raise IndexError(f"Insertion en première position, impossible de déduire les dossiers d'input pour {step.name}")
             
-            # Tous les cas problèmatiques tombent dans un out of index ou sont exclus par le check pos==0
+            # Tous les cas problématiques tombent dans un 'out of index' ou sont exclus par le check pos==0
             try:
                 previous_step: ProcessingStep = self.steps[position - 1]
                 # tant que l'étape est ajoutée à un autre point que la fin, on aura forcément une étape suivante
-                next_step: ProcessingStep= self.steps[position] if position < len(self.steps) else None
+                next_step: ProcessingStep = self.steps[position] if position < len(self.steps) else None
 
                 # === CHAINAGE ===
-                # si on arrive ici, toutes les exceptions sont déjà élevées. Pas de risque de modification de la pipeline malgré une blocage ensuite
+                # si on arrive ici, toutes les exceptions sont déjà élevées. Pas de risque de modification du pipeline malgré un blocage ensuite
                 step.input_paths = previous_step.output_paths
                 if next_step and not next_step.fixed_input:
                     # TODO : gérer les fixed_input en cas de len(input) > 1
@@ -327,13 +327,13 @@ class ProcessingPipeline:
             except IndexError as idx:
                 raise ValueError(f"Position d'insertion invalide pour déduire les dossiers d'input de {step.name}.") from idx
             except Exception as e:
-                raise RuntimeError(f"Erreur innatendue pour l'ajout de {step.name}") from e
+                raise RuntimeError(f"Erreur inattendue pour l'ajout de {step.name}") from e
         
         else:
             # on rentre si c'est la première étape (input_dirs *est* défini)
             pass
 
-        # === AJOUT DE L'ETAPE ===
+        # === AJOUT DE L'ÉTAPE ===
         self.steps.insert(position, step)
 
     def run(self, from_step_index: int = 0, only_one: bool = False):
