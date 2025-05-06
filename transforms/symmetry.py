@@ -4,14 +4,15 @@ from pathlib import Path
 from typing import Any, List, Literal, Optional
 from warnings import warn
 
-
 ALL_SYMS = ('o', 'h', 'v', 'hv')
+
+
 def generate_symmetries(
     input_path: Path, 
     output_dirs: List[Path],
 
     # Options pour contrôler la génération des symétries
-    pool: Optional[List[Literal[*ALL_SYMS]]] = None, # type: ignore
+    pool: Optional[List[Literal[*ALL_SYMS]]] = None,  # type: ignore
     choose_random: Optional[int] = None,
     include_original: bool = True,
     **options: Any
@@ -41,7 +42,7 @@ def generate_symmetries(
         Chemin du dossier de sortie. Liste d'un seul élément attendue. 
         *Les éventuels éléments supplémentaires seront ignorés.*
     pool : List[Literal['o', 'h', 'v', 'hv']], optional
-        Liste des symétries applicables. Si non renseigné, toutes les symétries sont sélectionées
+        Liste des symétries applicables. Si non renseigné, toutes les symétries sont sélectionnées
         , par défaut None
     choose_random : int, optional
         Choisit aléatoirement ce nombre d'orientations *uniques* dans le `pool`. 
@@ -88,7 +89,7 @@ def generate_symmetries(
     output_dir = output_dirs[0]
 
     if input_path.suffix.lower() != '.png':
-        # Peut être ouvrir à tout type d'image ?
+        # Peut-être ouvrir à tout type d'image ?
         raise ValueError(f"Le fichier {input_path.name} n'est pas un PNG.")
 
     # Valider le pool si fourni
@@ -99,21 +100,21 @@ def generate_symmetries(
 
     choose_random = len(pool) if choose_random is None else choose_random
     if choose_random > len(pool):
-        warn(f"Choix aléatoire de plus d'éléments ({choose_random}) que possible parmis {pool} ({len(pool)}).")
+        warn(f"Choix aléatoire de plus d'éléments ({choose_random}) que possible parmi {pool} ({len(pool)}).")
     elif choose_random < 0:
         raise ValueError(f"[{input_path.name} - Symétrie] `choose_random` ({choose_random}) doit être >= 0. Aucune symétrie aléatoire générée.")
     
     # Lire l'image
     image = cv2.imread(str(input_path), cv2.IMREAD_UNCHANGED)
     if image is None:
-        raise FileNotFoundError(f"[{input_path.name} - Symmétrie] Impossible de charger l'image.")
+        raise FileNotFoundError(f"[{input_path.name} - Symétrie] Impossible de charger l'image.")
     
     # Dictionnaire de fonctions génératrices de symétries
     sym_generators = {
-        "o" : lambda img: img.copy(),         # Image originale
+        "o" : lambda img: img.copy(),                 # Image originale
         "h" : lambda img: cv2.flip(img, 1),   # Symétrie horizontale 
         "v" : lambda img: cv2.flip(img, 0),   # Symétrie verticale 
-        "hv" : lambda img: cv2.flip(img, -1), # Symétrie h + v (rotation 180°)
+        "hv" : lambda img: cv2.flip(img, -1),         # Symétrie h + v (rotation 180°)
     }
 
     # Sélection des transformations à effectuer
@@ -123,7 +124,7 @@ def generate_symmetries(
     if include_original and 'o' not in set(filter_):
         filter_.append('o')
 
-    # Sauvegarde des images générés
+    # Sauvegarde des images générées
     saved_files: List[Path] = []
     for sym in filter_:
         image_flip = sym_generators[sym](image)
@@ -136,9 +137,9 @@ def generate_symmetries(
             if success:
                 saved_files.append(output_path)
             else:
-                # L'écriture a échoué sans lever d'exception (rare mais possible)
+                # L'écriture a échoué sans lever d'exception (rare, mais possible)
                 # jamais du coup ?
-                warn(f"Échec de sauvegarde de la symétrie '{sym}' pour {output_path.name}. Retour False depuis `imwrite`") 
+                warn(f"Échec de sauvegarde de la symétrie '{sym}' pour {output_path.name}. Retour False depuis `.imwrite`")
         except Exception as e_save:
             # Erreur lors de l'écriture (permissions, disque plein, etc.)
             warn(f"Erreur [{input_path.name} - Symétrie '{sym}']: Échec de sauvegarde pour {output_filename} : {e_save}.")
