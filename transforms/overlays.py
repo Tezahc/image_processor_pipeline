@@ -2,7 +2,7 @@ import random
 import math
 from pathlib import Path
 import numpy as np
-from typing import Optional, Dict, Tuple, List, Any, Union 
+from typing import Optional, Tuple, List, Any
 from PIL import Image, UnidentifiedImageError
 from ultralytics.utils.ops import xyxy2xywhn
 from deprecated import deprecated
@@ -27,38 +27,53 @@ def paste_overlay_onto_background(
 
     # Reçoit les **options définies pour l'étape
     yolo_class_id: int = 0,
-    min_scale: float = 0.1,
-    max_scale: float = 0.5,
+    scale_min: float = 0.15,
+    scale_max: float = 0.30,
     **options: Any # Accepter d'autres options non utilisées
+    # TODO: ajouter une option qui enregistre les informations d'appariement, un JSON avec overlay_name, bg_name, bbox, diag_ratio
 ) -> Optional[List[Path]]: # Retourne une liste de 2 Path (image, label) ou None
-    """
-    Superpose une image overlay sur un fond en contrôlant la surface relative
-    de l'overlay. Sauvegarde l'image résultante et le fichier label YOLO.
+    """Superpose une image overlay sur un fond et sauvegarde AAAAAAAAAAAAAAAl'image résultante et le fichier label YOLO.
 
-    L'overlay est redimensionné pour occuper une surface (en pixels) correspondant
-    à un pourcentage aléatoire (entre min_scale et max_scale)
-    de la surface totale de l'image de fond, tout en conservant ses proportions.
+    L'overlay est redimensionné en se basant sur un ratio aléatoire de la 
+    diagonale de l'image de fond. La taille finale de l'overlay est plafonnée
+    pour s'assurer qu'il tient entièrement dans le fond tout en conservant ses proportions.
     L'overlay est ensuite placé aléatoirement sur le fond.
+    L'image composite et un fichier label au format YOLO sont sauvegardés
 
-    Args:
-        overlay_path (Path): Chemin vers l'image overlay (avec canal alpha).
-        background_path (Path): Chemin vers l'image de fond.
-        output_paths (List[Path]): Liste des chemins des dossiers de sortie.
-                                   Attend au moins 2: [0] pour images, [1] pour labels.
-        yolo_class_id (int): ID de classe pour le label YOLO.
-        min_scale (float): Ratio minimal de la surface de l'overlay par rapport
-                                   à la surface du fond (ex: 0.01 pour 1%).
-        max_scale (float): Ratio maximal de la surface de l'overlay (ex: 0.05 pour 5%).
-        **options (Any): Accepte d'autres options.
+    Parameters
+    ----------
+    overlay_path : Path
+        Chemin vers l'image overlay. Doit être lisible par PIL et avoir un
+        canal alpha pour une superposition correcte.
+    background_path : Path
+        Chemin vers l'image de fond. Sera convertie en RGB.
+    output_dirs : List[Path]
+        Liste des chemins des dossiers de sortie. Au moins deux chemins sont
+        attendus : `output_dirs[0]` pour les images composites et
+        `output_dirs[1]` pour les fichiers de labels.
+    yolo_class_id : int, optional
+        ID de classe à utiliser dans le fichier label YOLO, par défaut 0.
+    scale_min : float, optional
+        Ratio minimal cible de la diagonale de l'overlay par rapport à la
+        diagonale de l'image de fond (ex: 0.15 pour 15%), par défaut 0.15.
+    scale_max : float, optional
+        Ratio maximal cible de la diagonale de l'overlay par rapport à la
+        diagonale de l'image de fond (ex: 0.30 pour 30%), par défaut 0.30.
+    **options : Any
+        Arguments supplémentaires non utilisés par cette fonction.
 
-    Returns:
-        Optional[List[Path]]:
-            - List[Path]: Liste contenant [chemin_image_sauvegardée, chemin_label_sauvegardé].
-            - None: Si erreur (lecture, dossiers sortie, placement impossible, sauvegarde échouée).
+    Returns
+    -------
+    Optional[List[Path]]
+        Une liste contenant deux `Path` objets : le chemin vers l'image
+        sauvegardée et le chemin vers le fichier label sauvegardé.
+        Retourne `None` en cas d'erreur (ex: fichier non trouvé,
+        dimensions invalides, impossible de placer l'overlay, échec de sauvegarde).
+
     """
     # --- 1. Vérifications Préliminaires ---
     if len(output_dirs) < 2:
-        print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: "
+        print(f"Erreur [{overlay_path.name} + {background_path.name}]: "
               f"Au moins 2 dossiers de sortie sont requis (images, labels), {len(output_dirs)} fourni(s).")
         return None
     image_target_dir = output_dirs[0]
@@ -67,54 +82,50 @@ def paste_overlay_onto_background(
     # --- 2. Charger overlay et background ---
     try:
         overlay = Image.open(overlay_path)
-        # overlay.verify()
         if overlay.mode != 'RGBA':
             overlay = overlay.convert('RGBA')
         
-        background = Image.open(background_path).convert('RGB') # Assurer RGB pour sortie JPG/JPEG
-        # background.verify()
+        # Assurer RGB pour sortie JPG/JPEG
+        background = Image.open(background_path).convert('RGB')
         
-    except FileNotFoundError as e:
-        print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: Fichier non trouvé: {e}")
+    except FileNotFoundError as fnf:
+        print(f"Erreur [{overlay_path.name} + {background_path.name}]: Fichier non trouvé: {fnf}")
         return None
-    except UnidentifiedImageError as e:
-        print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: Impossible d'ouvrir l'image {e}")
+    except UnidentifiedImageError as uie:
+        print(f"Erreur [{overlay_path.name} + {background_path.name}]: Impossible d'ouvrir l'image {uie}")
         return None
     except TypeError as te:
         print(f"Erreur [{overlay_path.name} + {background_path.name}]: Type d'image invalide : {te}")
         return None
     except Exception as e:
-        print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: Échec lecture fichiers: {e}")
+        print(f"Erreur [{overlay_path.name} + {background_path.name}]: Échec lecture fichiers: {e}")
         return None
 
-    # --- 3. Calculer taille et position (avec tentatives) ---
+    # --- 3. Calculer taille de l'overlay ---
     try:
-        # récupère la diagonale du fond et défini la diagonale de l'overlay désiré
+        # Diagonale du fond
         bg_diag = math.hypot(background.width, background.height)
-        target_ratio = random.uniform(min_scale, max_scale)
+        # Diagonale cible de l'overlay
+        target_ratio = random.uniform(scale_min, scale_max)
         ov_diag_target = bg_diag * target_ratio
 
         # Récupère le ratio de l'image (largeur/hauteur)
+        if overlay.height == 0:
+            raise ValueError(f"dimensions de l'overlay {overlay_path.name} invalides ({overlay.width}x{overlay.height}).")
         ov_aspect_ratio = overlay.width / overlay.height
 
         # limite la hauteur max de l'overlay et de la diagonale correspondante
         # (on pourrait partir de la largeur, c'est symétrique)
+        # bg_w / ov_ar = hauteur max si l'ov prend toute la largeur du bg
         h_max = min(background.width / ov_aspect_ratio, background.height)
         max_ov_diag = math.hypot(ov_aspect_ratio * h_max, h_max)
         ov_diag = min(ov_diag_target, max_ov_diag)
 
         # Définit les dimensions finales de l'overlay
+        # d^2 = w^2 + h^2 et w = ov_ar * h => (ov_ar*h)^2 + h^2 = h^2 * (ov_ar^2 + 1)
         new_ov_height = int(math.sqrt(ov_diag**2 / (ov_aspect_ratio**2 + 1)))  # tkt les maths
         new_ov_width = int(ov_aspect_ratio * new_ov_height)
 
-        # Vérifier si l'overlay redimensionné peut tenir dans le background
-        # NeverTM ? :pray:
-        if new_ov_width > background.width or new_ov_height > background.height:
-            print(f"Avertissement [{overlay_path.name} - OverlayPair]: Overlay redimensionné ({new_ov_width}x{new_ov_height}) "
-                  f"pour ratio de surface {target_ratio:.3f} est trop grand pour le fond ({background.width}x{background.height}). "
-                  "Opération annulée pour cette paire.")
-            return None
-        
         # Redimensionner l'overlay
         overlay_resized = overlay.resize((new_ov_width, new_ov_height), Image.Resampling.LANCZOS)
         
@@ -130,28 +141,22 @@ def paste_overlay_onto_background(
 
         # Coordonnées de la BBox de l'overlay sur l'image composite (format xyxy absolu)
         # (x_min, y_min, x_max, y_max)
-        bbox_xyxy_abs = np.array([pos_x, pos_y, pos_x + new_ov_width, pos_y + new_ov_height])
+        bbox_xyxy_abs = np.array([pos_x, pos_y, pos_x + new_ov_width, pos_y + new_ov_height]).reshape(1, 4)
 
         # Convertir xyxy (absolu) en xywhn (YOLO normalisé)
-        bbox_yolo_xywhn = xyxy2xywhn(bbox_xyxy_abs, *background.size, clip=True, eps=1e-3)
-        cx, cy, w_norm, h_norm = bbox_yolo_xywhn # Extraire la première (et unique) bbox
+        bbox_yolo_xywhn = xyxy2xywhn(bbox_xyxy_abs, *background.size)
+        cx, cy, w_norm, h_norm = bbox_yolo_xywhn[0] # Extraire la première (et unique) bbox
 
         yolo_label_str = f"{yolo_class_id} {cx:.6f} {cy:.6f} {w_norm:.6f} {h_norm:.6f}"
 
-    except ValueError as ve: # Erreurs de calcul, dimensions
-        print(f"Erreur de valeur [{overlay_path.name} + {background_path.name} - OverlayPair]: {ve}")
+    except ValueError as ve:
+        print(f"Erreur de valeur [{overlay_path.name} + {background_path.name}]: {ve}")
         return None
-    except Exception as e_process:
-        print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: "
-              f"Échec pendant le processus de superposition: {e_process}")
-        import traceback
-        traceback.print_exc() # Pour debug plus détaillé
-
-        return None
-
-    # --- 5. Vérifier si le placement a réussi ---
-    if composite_image is None or yolo_label_str is None:
-        print(f"Avertissement [OverlayPair]: Impossible de placer {overlay_path.name} sur {background_path.name}.")
+    except Exception as e:
+        print(f"Erreur [{overlay_path.name} + {background_path.name}]: "
+              f"Échec pendant le processus de superposition: {e}")
+        # import traceback
+        # traceback.print_exc() # Pour debug plus détaillé
         return None
 
     # --- 6. Sauvegarde de l'image et du label ---
@@ -162,32 +167,26 @@ def paste_overlay_onto_background(
     label_output_path = label_target_dir / f"{overlay_path.stem}.txt"
     
     try:
-        # Sauvegarder l'image
         composite_image.save(img_output_path)
         saved_paths.append(img_output_path)
         
-        # Sauvegarder le label
         with open(label_output_path, 'w', encoding='utf-8') as f:
             f.write(yolo_label_str)
         saved_paths.append(label_output_path)
 
-        # print(f"Info [{overlay_path.name} + {background_path.name} - OverlayPair]: Image et Label sauvegardés.")
         # --- 7. Retourner la liste des DEUX chemins ---
         return saved_paths
 
     except Exception as e_save:
-        print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: Échec lors de la sauvegarde: {e_save}")
+        print(f"Erreur [{overlay_path.name} + {background_path.name}]: Échec lors de la sauvegarde: {e_save}")
         # import traceback
         # traceback.print_exc()
-        # Nettoyer les fichiers potentiellement créés partiellement ? Optionnel.
-        # Si l'image a été sauvée mais le label échoue, saved_paths contiendra 1 élément.
-        # Si on veut être strict, on supprime le fichier image aussi.
         for p in saved_paths:
             try:
                 if p.exists(): p.unlink()
             except OSError:
                 print(f"Avertissement: Impossible de nettoyer le fichier partiellement créé {p}")
-        return None # Échec global si la sauvegarde d'un des deux échoue
+        return None
 
 
 @deprecated(reason="utiliser `paste_overlay_onto_background` à la place.")
@@ -227,7 +226,7 @@ def process_overlay_pair(
     """
     # --- 1. Vérifications Préliminaires ---
     if len(output_dirs) < 2:
-        print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: "
+        print(f"Erreur [{overlay_path.name} + {background_path.name}]: "
               f"Au moins 2 dossiers de sortie sont requis (images, labels), {len(output_dirs)} fourni(s).")
         return None
     image_target_dir = output_dirs[0]
@@ -241,13 +240,13 @@ def process_overlay_pair(
         background = Image.open(background_path).convert('RGB') # Assurer RGB pour sortie JPG/JPEG
 
     except FileNotFoundError as e:
-        print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: Fichier non trouvé: {e}")
+        print(f"Erreur [{overlay_path.name} + {background_path.name}]: Fichier non trouvé: {e}")
         return None
     except UnidentifiedImageError as e:
-        print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: Impossible d'ouvrir l'image {e}")
+        print(f"Erreur [{overlay_path.name} + {background_path.name}]: Impossible d'ouvrir l'image {e}")
         return None
     except Exception as e:
-        print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: Échec lecture fichiers: {e}")
+        print(f"Erreur [{overlay_path.name} + {background_path.name}]: Échec lecture fichiers: {e}")
         return None
 
     # --- 3. Calculer taille et position (avec tentatives) ---
@@ -265,7 +264,7 @@ def process_overlay_pair(
         base_size = min(bg_width, bg_height) * scale
         ov_width, ov_height = overlay.size
         if ov_width <=0 or ov_height <=0: # Vérifier overlay valide
-             print(f"Erreur [{overlay_path.name} - OverlayPair]: Overlay a des dimensions invalides {ov_width}x{ov_height}.")
+             print(f"Erreur [{overlay_path.name}]: Overlay a des dimensions invalides {ov_width}x{ov_height}.")
              return None # Erreur fatale pour cette paire
 
         # Calcul ratio basé sur dimension overlay
@@ -308,12 +307,12 @@ def process_overlay_pair(
                 break # Sortir de la boucle while/for attempts
 
             except ValueError as e_yolo: # Erreur spécifique de _convert_to_yolo_bbox
-                 print(f"Erreur [{overlay_path.name} - OverlayPair]: Erreur conversion YOLO: {e_yolo}")
+                 print(f"Erreur [{overlay_path.name}]: Erreur conversion YOLO: {e_yolo}")
                  # C'est une erreur fatale pour cette paire, on ne peut pas générer de label
                  return None
             except Exception as e_paste:
                  # Erreur pendant resize ou paste
-                 print(f"Erreur [{overlay_path.name} - OverlayPair]: Échec redim/collage tentative {attempt+1}: {e_paste}")
+                 print(f"Erreur [{overlay_path.name}]: Échec redim/collage tentative {attempt+1}: {e_paste}")
                  # Essayer à nouveau si possible
 
     # --- 4. Vérifier si le placement a réussi ---
@@ -338,12 +337,12 @@ def process_overlay_pair(
             f.write(yolo_label_str)
         saved_paths.append(label_output_path)
 
-        # print(f"Info [{overlay_path.name} + {background_path.name} - OverlayPair]: Image et Label sauvegardés.")
+        # print(f"Info [{overlay_path.name} + {background_path.name}]: Image et Label sauvegardés.")
         # --- 6. Retourner la liste des DEUX chemins ---
         return saved_paths
 
     except Exception as e_save:
-        print(f"Erreur [{overlay_path.name} + {background_path.name} - OverlayPair]: Échec lors de la sauvegarde: {e_save}")
+        print(f"Erreur [{overlay_path.name} + {background_path.name}]: Échec lors de la sauvegarde: {e_save}")
         import traceback
         traceback.print_exc()
         # Nettoyer les fichiers potentiellement créés partiellement ? Optionnel.
