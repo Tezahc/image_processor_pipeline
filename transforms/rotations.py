@@ -75,7 +75,7 @@ def process_rotations(
 
     # Sauvegarder l'original si demandé
     if include_original:
-        output_filename_orig = f"{original_key}_{base_name}{out_suffix}"
+        output_filename_orig = f"{base_name}_{original_key}{out_suffix}"
         output_file_path_orig = target_dir / output_filename_orig
         try:
             img.save(output_file_path_orig, format=output_format)
