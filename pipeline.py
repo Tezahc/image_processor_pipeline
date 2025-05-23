@@ -17,6 +17,7 @@ class ProcessingStep:
                  pairing_function: Optional[Callable[[List[List[Path]]], Iterator[Tuple]]] = None,
                  fixed_input: bool = False,
                  root_dir: Optional[str | Path] = None,
+                 sample_k: Optional[int] = None,
                  options: Optional[Dict] = None):
         """
         TODO: rewrite et uniformiser les styles de docstring (numpy ou Google)
@@ -45,6 +46,7 @@ class ProcessingStep:
         # TODO : Tester None au lieu de Path('.') ou même cwd() probablement encore mieux
         self.root_dir = Path(root_dir) if root_dir else None 
         self.process_kwargs = options or {}
+        self.sample_k = sample_k
 
         # Résolution des chemins
         self.input_paths: List[Path] = self._resolve_paths(input_dirs or [])
@@ -148,6 +150,10 @@ class ProcessingStep:
         if not all(input_file_lists):
             empty_folders = [str(self.input_paths[i]) for i, lst in enumerate(input_file_lists) if not lst] 
             raise FileNotFoundError(f"Aucun fichier trouvé dans les dossiers d'entrée {empty_folders} pour l'étape '{self.name}'.")
+        
+        if self.sample_k and isinstance(self.sample_k, int):
+            sample_ids = random.sample(range(len(input_file_lists[0])), self.sample_k)
+            input_file_lists = [[file_list[i] for i in sample_ids] for file_list in input_file_lists]
         
         if self.pairing_method == 'one_input':
             if input_len == 0:  # Sécurité
