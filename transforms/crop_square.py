@@ -4,31 +4,10 @@ import numpy as np
 from warnings import warn
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
+from image_processor_pipeline.utils import utils
 from ultralytics.utils.ops import xywhn2xyxy, xyxy2xywhn
 from icecream import ic
 
-
-def _validate_dirs(output_dirs: List[Path]) -> Tuple[Path, Path]:
-    """Vérifie que 2 répertoires de sortie sont fournis.
-
-    Parameters
-    ----------
-    output_dirs : List[Path]
-        Liste des répertoires de sortie.
-
-    Returns
-    -------
-    Tuple[Path, Path]
-        Répertoires pour les images et les labels respectivement.
-    
-    Raises
-    ------
-    IndexError
-        Si moins de 2 dossiers sont fournis.
-    """
-    if len(output_dirs) < 2:
-        raise IndexError(f"Au moins 2 dossiers de sortie requis (images, labels). {len(output_dirs)} fournis.")
-    return Path(output_dirs[0]), Path(output_dirs[1])
 
 def _load_image(filepath: Path) -> np.ndarray:
     """Charge une image avec OpenCV.
@@ -172,7 +151,7 @@ def process_square_crop_around_bbox(
     [Path('out/imgs/crop_img.jpg'), Path('out/labels/crop_img.txt')]
     """
     # --- 1. Validation des chemins ---
-    image_target_dir, label_target_dir = _validate_dirs(output_dirs)
+    image_target_dir, label_target_dir = utils._validate_dirs(output_dirs)
 
     if input_image_path.stem != input_label_path.stem:
         warn(f"Warning [Crop Carré]: image ({input_image_path.name}) et label ({input_label_path.name}) "

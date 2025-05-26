@@ -1,4 +1,7 @@
+import numpy as np
+import cv2
 from pathlib import Path
+from typing import List, Tuple
 
 
 def check_path(folder_name, root=None):
@@ -32,3 +35,58 @@ def check_path(folder_name, root=None):
     else:
         # Combiner le chemin relatif avec le chemin racine
         return root_path / path
+
+def _validate_dirs(output_dirs: List[Path]) -> Tuple[Path, Path]:
+    """Vérifie que 2 répertoires de sortie sont fournis.
+
+    Parameters
+    ----------
+    output_dirs : List[Path]
+        Liste des répertoires de sortie.
+
+    Returns
+    -------
+    Tuple[Path, Path]
+        Répertoires pour les images et les labels respectivement.
+    
+    Raises
+    ------
+    IndexError
+        Si moins de 2 dossiers sont fournis.
+    """
+    if len(output_dirs) < 2:
+        raise IndexError(f"Au moins 2 dossiers de sortie requis (images, labels). {len(output_dirs)} fournis.")
+    return Path(output_dirs[0]), Path(output_dirs[1])
+
+def _save_crop_files(
+    img: np.ndarray,
+    labels: Tuple[np.ndarray, np.ndarray],
+    img_out: Path,
+    label_out: Path
+) -> None:
+    """Sauvegarde l'image et les labels associés.
+
+    Parameters
+    ----------
+    img : np.ndarray
+        Image à sauvegarder.
+    labels : Tuple[np.ndarray, np.ndarray]
+        Classes (N, 1) et bboxes normalisées (N, 4)
+    img_out : Path
+        Chemin du fichier image de sortie.
+    label_out : Path
+        Chemin du fichier label de sortie.
+    
+    Raises
+    ------
+    IOError
+        Si l'image ne peut être écrite.
+    """
+    classes, bboxes = labels
+    if not cv2.imwrite(str(img_out), img):
+        raise IOError(f"Échec écriture de l'image : {img_out}")
+    
+    with open(label_out, 'w', encoding='utf-8') as f:
+        for cls_id, box in zip(classes, bboxes):
+            cx, cy, w, h = box
+            f.write(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")

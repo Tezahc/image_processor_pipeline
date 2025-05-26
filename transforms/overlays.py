@@ -2,6 +2,7 @@ import random
 import math
 from pathlib import Path
 import numpy as np
+from image_processor_pipeline.utils import utils
 from typing import Optional, Tuple, List, Any
 from PIL import Image, UnidentifiedImageError
 from ultralytics.utils.ops import xyxy2xywhn
@@ -32,13 +33,14 @@ def paste_overlay_onto_background(
     **options: Any # Accepter d'autres options non utilisées
     # TODO: ajouter une option qui enregistre les informations d'appariement, un JSON avec overlay_name, bg_name, bbox, diag_ratio
 ) -> Optional[List[Path]]: # Retourne une liste de 2 Path (image, label) ou None
-    """Superpose une image overlay sur un fond et sauvegarde AAAAAAAAAAAAAAAl'image résultante et le fichier label YOLO.
+    """
+    Superpose une image overlay sur un fond. Sauvegarde l'image résultante et le fichier label YOLO.
 
     L'overlay est redimensionné en se basant sur un ratio aléatoire de la 
     diagonale de l'image de fond. La taille finale de l'overlay est plafonnée
     pour s'assurer qu'il tient entièrement dans le fond tout en conservant ses proportions.
     L'overlay est ensuite placé aléatoirement sur le fond.
-    L'image composite et un fichier label au format YOLO sont sauvegardés
+    L'image composite et un fichier label au format YOLO sont sauvegardés.
 
     Parameters
     ----------
@@ -65,19 +67,16 @@ def paste_overlay_onto_background(
     Returns
     -------
     Optional[List[Path]]
-        Une liste contenant deux `Path` objets : le chemin vers l'image
-        sauvegardée et le chemin vers le fichier label sauvegardé.
+        Une liste contenant deux `Path` objets : le chemin vers l'image sauvegardée et le chemin vers le fichier label sauvegardé.  
         Retourne `None` en cas d'erreur (ex: fichier non trouvé,
         dimensions invalides, impossible de placer l'overlay, échec de sauvegarde).
-
+    
+    Raises
+    ------
+    ValueError
     """
-    # --- 1. Vérifications Préliminaires ---
-    if len(output_dirs) < 2:
-        print(f"Erreur [{overlay_path.name} + {background_path.name}]: "
-              f"Au moins 2 dossiers de sortie sont requis (images, labels), {len(output_dirs)} fourni(s).")
-        return None
-    image_target_dir = output_dirs[0]
-    label_target_dir = output_dirs[1]
+    # --- 1. Validation des chemins ---
+    image_target_dir, label_target_dir = utils._validate_dirs(output_dirs)
 
     # --- 2. Charger overlay et background ---
     try:
