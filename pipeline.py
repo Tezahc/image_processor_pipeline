@@ -1,3 +1,6 @@
+import concurrent
+import concurrent.futures
+from os import cpu_count
 from pathlib import Path
 from typing import Callable, List, Dict, Optional, Tuple, Iterator, Literal
 from warnings import warn
@@ -18,6 +21,7 @@ class ProcessingStep:
                  fixed_input: bool = False,
                  root_dir: Optional[str | Path] = None,
                  sample_k: Optional[int] = None,
+                 workers: Optional[int] = 1,
                  options: Optional[Dict] = None):
         """
         TODO: rewrite et uniformiser les styles de docstring (numpy ou Google)
@@ -73,6 +77,14 @@ class ProcessingStep:
         # Map pour suivre les sorties générées par entrée(s)
         self.processed_files_map: Dict[Tuple[Path, ...], Path | List[Path]] = {}  # Clé est tuple de Path d'entrée
 
+        # Gestion de la parallélisation
+        nb_cpus = cpu_count()
+        if workers > nb_cpus:
+            warn(f"Nombre de workers parallèles ajusté à {nb_cpus} (maximum système).")
+        if workers == -1:
+            workers = nb_cpus
+        self.parallels_workers = min(workers, nb_cpus)
+
     def _resolve_paths(self, dir_list: str | Path | List[str | Path]) -> List[Path]:
         """Convertit et résout les chemins par rapport au root_dir. 
         Chaque chemin de la liste est converti en Path.
@@ -114,7 +126,8 @@ class ProcessingStep:
             if not input_dir.is_dir():
                 # Lever une erreur si le dossier n'existe pas (ou n'est pas un dossier)
                 raise FileNotFoundError(f"Le dossier d'entrée spécifié n'existe pas: '{input_dir}' pour l'étape '{self.name}'")
-
+            
+            # TODO: ce try serait mieux catch en amont et directement raise des erreur
             try:
                 # Lister tous les fichiers et trier
                 files = sorted([f for f in input_dir.iterdir() if f.is_file()])
@@ -122,6 +135,7 @@ class ProcessingStep:
                 print(f"  '{input_dir.name}' : {len(files)} fichiers trouvés.") 
                 all_file_lists.append(files)
             except Exception as e:
+                # FIXME: horrible : exception (tout) renvoie une IOError
                 # Gérer autres erreurs potentielles (ex: permissions)
                 raise IOError(f"Échec de l'inventaire du dossier {input_dir}") from e
 
@@ -151,10 +165,12 @@ class ProcessingStep:
             empty_folders = [str(self.input_paths[i]) for i, lst in enumerate(input_file_lists) if not lst] 
             raise FileNotFoundError(f"Aucun fichier trouvé dans les dossiers d'entrée {empty_folders} pour l'étape '{self.name}'.")
         
+        # Prélève le nombre d'éléments prescrit. Aux même ids pour chaque liste d'input
         if self.sample_k and isinstance(self.sample_k, int):
             sample_ids = random.sample(range(len(input_file_lists[0])), self.sample_k)
             input_file_lists = [[file_list[i] for i in sample_ids] for file_list in input_file_lists]
         
+        # Mode de génération :
         if self.pairing_method == 'one_input':
             if input_len == 0:  # Sécurité
                 raise ValueError("Mode 'one_input' mais aucun dossier d'entrée fourni.")
@@ -170,12 +186,14 @@ class ProcessingStep:
             yield from zip(*input_file_lists)
 
         elif self.pairing_method == 'modulo':
+            # à la différence de zip, modulo revient au début de la deuxième liste si elle est totalement parcourue
             if input_len != 2:
                 raise ValueError("Le mode 'modulo' requiert exactement 2 dossiers d'entrée.")
             list1 = input_file_lists[0]
             list2 = input_file_lists[1]
 
             # TODO ? shuffle_input en option ? pareil pour zip ?
+            # shuffle seulement la 2e liste (backgrounds) suffisant.
             random.shuffle(list2)
 
             list2_len = len(list2)
@@ -195,7 +213,7 @@ class ProcessingStep:
 
     def run(self):
         """Exécute l'étape de traitement pour tous les éléments/paires d'entrée."""
-        self.processed_files_map = {}  # Trace les résultats, y'a un truc à faire avec... un jour...
+        self.processed_files_map = {}  # Retrace les résultats, y'a un truc à faire avec... un jour...
         print(f"--- Exécution Étape : {self.name} ---")
         # print(self) # Utiliser __str__ pour afficher les détails si besoin 
         # TODO : paramètre verbose
@@ -206,15 +224,16 @@ class ProcessingStep:
             try:
                 output_path.mkdir(parents=True, exist_ok=True)
                 print(f"  Sortie -> '{output_path}'")
+            except IOError as ioe:
+                raise IOError(f"Impossible de créer le dossier de sortie '{output_path}': {ioe}") from ioe 
             except Exception as e:
-                raise IOError(f"Impossible de créer le dossier de sortie '{output_path}': {e}") from e 
-
+                print(f"Erreur lors de la création du dossier {output_path}. {e}")
+                return
+        
         # 2. Lister les fichiers d'entrée
         try:
             input_file_lists = self._get_files_from_inputs()
-        
         except (FileNotFoundError, ValueError, IOError) as e:
-            # Erreur lors du listing ou dossier vide alors que requis
             print(f"Erreur [{self.name}]: Condition préalable non remplie pour démarrer l'étape. {e}")
             return
 
@@ -227,60 +246,20 @@ class ProcessingStep:
             print(f"Erreur [{self.name}]: Impossible de générer les arguments pour le mode '{self.pairing_method}'. {e}")
             return
 
+        # Calcul du total pour tqdm
+        total_items = None
+        try:
+            if self.pairing_method == 'one_input': total_items = len(input_file_lists[0])
+            elif self.pairing_method == 'modulo': total_items = len(input_file_lists[0])
+            elif self.pairing_method == 'zip': total_items = min(len(lst) for lst in input_file_lists if lst)
+            else: raise ValueError(f"mode d'appariemment inconnu, utiliser un parmi {MODES}")
+        except Exception: total_items = None
+
         # --------------------------------------------------------------------------------------------
         #                    4. Boucle de traitement (avec tqdm SoonTM tkt)
         # --------------------------------------------------------------------------------------------
-        # TODO: quid d'un dictionnaires {processed:[], errors:[]} et on a le compte avec len() ?
-        processed_count = 0
-        errors_count = 0 
 
-        print(f"Info [{self.name}]: Démarrage du traitement...")
-    
-        # Utilisation de tqdm pour la barre de progression
-        # progress_bar = tqdm(argument_iterator, desc=self.name, unit="item", total=total_items, smoothing=0)
-        for input_args_tuple in argument_iterator:
-            try:
-                # Clé pour le suivi
-                input_key = input_args_tuple
-                
-                # Appel de la fonction de traitement
-                # Elle reçoit les chemins d'entrée, les chemins de sortie, et les options
-                saved_output_paths: Optional[Path | List[Path]] = self.process_function(
-                    *input_args_tuple,              # Dépaquette les chemins d'entrée
-                    # TODO: dépaqueter aussi output_dirs (nécessite de revoir totu les fonctions...)
-                    output_dirs=self.output_paths,  # Passe la liste des dossiers de sortie
-                    **self.process_kwargs           # Passe les options définies pour l'étape
-                )
-
-                # Vérifier le retour de la fonction de traitement
-                if saved_output_paths:
-                    # S'assurer que c'est bien Path ou List[Path] (pourrait être plus strict)
-                    if isinstance(saved_output_paths, Path) or \
-                       (isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths)):
-                        self.processed_files_map[input_key] = saved_output_paths
-                        processed_count += 1
-                    else:
-                        # TODO: première occurrence mais valable pour tous : Utiliser des vrais warnings (module spé)
-                        warn(f"Avertissement [{self.name}]: Retour invalide de process_function pour {input_key} (type: {type(saved_output_paths)}). Attendu Path, List[Path] ou None.")
-                        errors_count += 1
-                else:
-                    # La fonction de traitement a retourné None (échec géré ou rien à sauvegarder)
-                    # On peut choisir de le compter comme une erreur ou non. Comptons-le.
-                    errors_count += 1
-                    # Optionnel: logger l'entrée qui n'a rien produit
-                    # print(f"Debug [{self.name}]: Aucun fichier sauvegardé (→ renvoyé) pour l'entrée {input_key}")
-
-            except Exception as e_proc:
-                # Erreur inattendue DANS process_function ou lors de son appel
-                print(f"\nErreur [{self.name}]: Échec critique lors du traitement de {input_args_tuple}: {e_proc}")
-                # Afficher le traceback peut être utile pour le débogage
-                # import traceback
-                # traceback.print_exc()
-                errors_count += 1
-                # Optionnel: mettre à jour la description de tqdm
-                # progress_bar.set_postfix_str(f"Erreur sur {input_args_tuple[0].name}", refresh=True)
-
-        # progress_bar.close() # Fermer proprement la barre tqdm
+        processed_count, errors_count = self._processing_loop(argument_iterator, total_items)
 
         # TODO: intégrer le timings (quoique, avec tqdm.... :pray:)
         print(f"--- Étape {self.name} terminée ---") 
@@ -288,6 +267,118 @@ class ProcessingStep:
         if errors_count > 0:
             print(f"  {errors_count} erreur(s) ou traitement(s) sans retour.")
 
+    def _processing_loop(self, 
+                         argument_iterator: Iterator[Tuple[Path, ...]], 
+                         total_items: int) -> Tuple[int, int]:
+        """Exécute la boucle de traitement principale, soit en séquentiel, soit en parallèle.
+        Met à jour self.processed_files_map et retourne les compteurs.
+        """
+        processed_count = 0
+        error_count = 0
+
+        # --- Logique Séquentielle ---
+        if not self.parallels_workers or 0 <= self.parallels_workers <= 1:
+            print(f"Info [{self.name}]: Exécution en mode séquentiel...")
+            for input_args_tuple in tqdm(argument_iterator, 
+                                         desc=self.name, 
+                                         total=total_items, 
+                                         unit="item", 
+                                         leave=True, 
+                                         smoothing=0):
+                try:
+                    # Clé pour le suivi
+                    input_key = input_args_tuple
+
+                    # Appel de la fonction de traitement
+                    saved_output_paths: Optional[Path | List[Path]] = self.process_function(
+                        *input_args_tuple,              # Dépaquette les chemins d'entrée
+                        output_dirs=self.output_paths,  # liste des dossiers de sortie
+                        **self.process_kwargs           # Passage des options en kwargs
+                    )
+
+                    # Vérification du retour de la fonction de traitement
+                    if saved_output_paths:
+                        # on vérifie qu'on a bien un type Path (ou liste de paths)
+                        # utilité ? 
+                        if isinstance(saved_output_paths, Path) or \
+                           (isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths)):
+                            self.processed_files_map[input_key] = saved_output_paths
+                            processed_count += 1
+                        else:
+                            # TODO: utiliser des vrais warn ou système de logging
+                            tqdm.write(f"Avertissement [{self.name}]: Retour invalide de {self.process_function} pour {input_key} (type: {type(saved_output_paths)}).")
+                            error_count += 1
+                    else:
+                        # la fonction a retourné None (échec géré ou rien à sauvegarder)
+                        error_count += 1
+                        # Option : logger l'entrée qui n'a rien produit
+                except Exception as e_proc:
+                    # Erreur innatendue dans process_function ou lors de l'appel
+                    tqdm.write(f"\nErreur [{self.name}]: Échec traitement de {input_args_tuple}: {e_proc}")
+                    error_count += 1
+            return processed_count, error_count
+        
+        # --- Logique Parallèle --- 
+        elif self.parallels_workers > 1 or self.parallels_workers == -1:
+            print(f"Info [{self.name}]: Exécution en mode parallèle avec {self.parallels_workers} workers...")
+
+            list_of_input_args = list(argument_iterator)
+            if not list_of_input_args:
+                raise RuntimeError(f"Aucun argument à traiter après génération. Fin.")
+            
+            # Mettre à jour total_item si l'itérateur a été consomé
+            if total_items is None:
+                total_items = len(list_of_input_args)
+            
+            with concurrent.futures.ProcessPoolExecutor(max_workers=self.parallels_workers) as executor:
+                # Dictionnaire pour mapper les futures aux arguments d'entrée (pour le logging d'erreur)
+                future_to_args: Dict[concurrent.futures.Future, Tuple[Path, ...]] = {}
+
+                print(f"Info [{self.name}]: Soumission de {len(list_of_input_args)} tâches au pool de processus...")
+                for input_args_tuple in list_of_input_args:
+                    try:
+                        future = executor.submit(
+                            self.process_function,
+                            *input_args_tuple,
+                            output_dirs=self.output_paths,
+                            **self.process_kwargs
+                        )
+                        future_to_args[future] = input_args_tuple
+                    except Exception as e_submit:
+                        tqdm.write(f"Erreur [{self.name}]: Échec de la soumission de la tâche pour {input_args_tuple}: {e_submit}")
+                        error_count += 1
+                
+                for future in tqdm(concurrent.futures.as_completed(future_to_args.keys()),
+                                   total=len(future_to_args),
+                                   desc=self.name,
+                                   unit="item",
+                                   leave=True,
+                                   smoothing=0):
+                    # Récupère les args d'origine pour ce future
+                    input_key = future_to_args[future] 
+
+                    try:
+                        saved_output_paths: Optional[Path | List[Path]] = future.result() # Bloque jusqu'à résultat
+
+                        if saved_output_paths:
+                            if isinstance(saved_output_paths, Path) or \
+                               (isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths)):
+                                self.processed_files_map[input_key] = saved_output_paths
+                                processed_count += 1
+                            else:
+                                tqdm.write(f"Avertissement [{self.name}]: Retour invalide (parallèle) pour {input_key} (type: {type(saved_output_paths)}).")
+                                errors_count += 1
+                        else:
+                            errors_count += 1
+                    except Exception as e_exec: # Erreur DANS le processus enfant
+                        tqdm.write(f"\nErreur [{self.name}]: Échec tâche parallèle pour {input_key}: {e_exec}")
+                        # import traceback; tqdm.write(traceback.format_exc()) # Pour debug
+                        errors_count += 1
+            return processed_count, error_count
+        
+        else:
+            raise ValueError(f"")
+            
 
 class ProcessingPipeline:
     def __init__(self, root_dir: Optional[str | Path] = None):
