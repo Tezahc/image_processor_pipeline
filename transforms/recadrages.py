@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 import cv2
+from PIL import Image
 
 
 def _compute_crop(value, total_length):
@@ -59,3 +60,23 @@ def crop_from_border(
         print(f"Erreur [{file.name} - Symétrie]: Échec de sauvegarde pour {output_path.name}: {e_save}")
         return None
 
+def fit_crop(
+    image_path: Path,
+    output_dirs: List[Path],
+    **options: Any
+) -> Optional[List[Path]]:
+    """Crop une image de sorte à supprimer les pixels transparents superflus"""
+    output_dir = output_dirs[0]
+
+    image = Image.open(image_path)
+
+    bbox = image.getbbox()
+    if not bbox:
+        new_image = image.copy()
+    else:
+        new_image = image.crop(bbox)
+    
+    output_path = output_dir / image_path.name
+    new_image.save(output_path)
+
+    return output_path
