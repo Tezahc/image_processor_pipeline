@@ -113,34 +113,38 @@ def process_images_with_color_masks(
 # --- Exemple d'utilisation ---
 if __name__ == '__main__':
     # Définir les chemins (adaptez-les à votre configuration)
-    input_dir = r"C:\Users\GuillaumeChazet\Documents\ICUREsearch\DeepValve\MicroClave\video\CROPPED_0026_bis"
-    output_dir = r"C:\Users\GuillaumeChazet\Documents\ICUREsearch\DeepValve\MicroClave\video\OVERLAYS_0026_FUNCTION"
+    input_dir = r"C:\Users\GuillaumeChazet\Documents\ICUREsearch\PiccMid\Training\dataset\H1_2\Videos\DSC_0059\1-crop"
+    output_dir = r"C:\Users\GuillaumeChazet\Documents\ICUREsearch\PiccMid\Training\dataset\H1_2\Videos\DSC_0059\2-filter_large"
 
     # Définir la liste des plages de couleurs HSV à exclure
     # Chaque tuple = (H_min, S_min, V_min, H_max, S_max, V_max)
     colors_to_remove = [
         # 🌕 Jaune vif / doré
-        (20, 100, 180, 40, 255, 255),
-        (0, 100, 100, 20, 255, 255),
-        (160, 100, 100, 180, 255, 255),
+        # (20, 100, 180, 40, 255, 255),
+        # (0, 100, 100, 20, 255, 255),
+        # (160, 100, 100, 180, 255, 255),
         # 🟡 Jaune/orangé plus doux (brun clair / caramel)
-        (15, 90, 130, 35, 220, 240),
+        # (15, 90, 130, 35, 220, 240),
         # 🟤 Brun olive foncé à clair (#766641, #73623f)
-        (10, 60, 60, 35, 160, 160),
+        # (10, 60, 60, 35, 160, 160),
         # 🟢 Vert clair (mint, plastique clair)
-        (45, 20, 160, 75, 120, 255),
-        (40, 50, 50, 80, 255, 255),
+        # (45, 20, 160, 75, 120, 255),
+        # (40, 50, 50, 80, 255, 255),
         # 🟩 Vert plus foncé ou désaturé (contours, bordure floue)
-        (40, 30, 120, 70, 180, 200),
+        # (40, 30, 120, 70, 180, 200),
         # ⚫ Bords noirs ou très sombres à faible saturation
         # (0, 0, 0, 20, 60, 90),
-        (0, 0, 0, 180, 50, 100),
+        # (0, 0, 0, 180, 50, 100),
         # 🟫 Bords de transition brun/noir (comme #a49756)
-        (15, 40, 80, 30, 140, 180),
-        (8, 137, 24, 28, 255, 144),
-        (7, 26, 0, 27, 146, 116),
-        # blanc / clairs
-        # (0, 0, 200, 180, 50, 255)
+        # (15, 40, 80, 30, 140, 180),
+        # (8, 137, 24, 28, 255, 144),
+        # (7, 26, 0, 27, 146, 116),
+        # ⚪ blanc / clairs
+        # (0, 0, 200, 180, 50, 255),
+        # 🔘 gris clair (#929292)
+        # (0, 0, 130, 180, 20, 160)
+        # (0, 0, 110, 180, 30, 170)
+        (0, 0, 100, 180, 40, 180)
     ]
 
     # [
@@ -163,7 +167,7 @@ if __name__ == '__main__':
     # ]
 
     # Définir le préfixe pour les fichiers de sortie
-    output_file_prefix = "0026"
+    output_file_prefix = "H1_2"
 
     # Appeler la fonction
     process_images_with_color_masks(input_dir, output_dir, colors_to_remove, output_file_prefix)
