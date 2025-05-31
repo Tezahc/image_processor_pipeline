@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import List
 import cv2
+from PIL import Image
 import numpy as np
 
 
@@ -57,17 +58,23 @@ def keep_largest_component(
     # Recomposer l'image avec le canal alpha nettoyé
     cleaned_image = cv2.merge((b, g, r, alpha))
 
+    # crop fit
+    cropped_image = _crop_fit(cv2.cvtColor(cleaned_image, cv2.COLOR_BGR2RGB))
+
     output_path = output_dir / file.name
 
     try:
-        success = cv2.imwrite(str(output_path), cleaned_image)
-        if success:
-            return output_path
-        else:
-            # L'écriture a échoué sans lever d'exception (rare mais possible)
-            print(f"Avertissement [{file.name} - Symétrie]: Échec de sauvegarde (imwrite a retourné False) pour {output_path.name}")
-            return None
+        # success = cv2.imwrite(str(output_path), cleaned_image)
+        cropped_image.save(output_path)
+        return output_path
     except Exception as e_save:
         # Erreur lors de l'écriture (permissions, disque plein, etc.)
         print(f"Erreur [{file.name} - Symétrie]: Échec de sauvegarde pour {output_path.name}: {e_save}")
         return None
+    
+def _crop_fit(img: np.ndarray) -> Image.Image:
+    """Convertit une image cv2 et suprimme les bords transparents."""
+    image = Image.fromarray(img)
+    box = image.getbbox()
+    crop_image = image.crop(box)
+    return crop_image
