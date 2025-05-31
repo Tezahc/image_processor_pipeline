@@ -59,7 +59,7 @@ def keep_largest_component(
     cleaned_image = cv2.merge((b, g, r, alpha))
 
     # crop fit
-    cropped_image = _crop_fit(cv2.cvtColor(cleaned_image, cv2.COLOR_BGR2RGB))
+    cropped_image = _crop_fit(cleaned_image)
 
     output_path = output_dir / file.name
 
@@ -74,7 +74,8 @@ def keep_largest_component(
     
 def _crop_fit(img: np.ndarray) -> Image.Image:
     """Convertit une image cv2 et suprimme les bords transparents."""
-    image = Image.fromarray(img)
+    img_rgba = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+    image = Image.fromarray(img_rgba)
     box = image.getbbox()
     crop_image = image.crop(box)
     return crop_image
