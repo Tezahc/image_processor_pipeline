@@ -14,7 +14,7 @@ def frame_extraction(
         raise ValueError("Aucun nom de fichier de base fournit pour les nom des frames.")
 
     # Création d'un dossier par fichier, au nom du fichier vidéo d'origine
-    output_dir = output_dirs[0] / video_path.stem
+    output_dir = output_dirs[0] / video_path.stem / "0-raw"
     # exceptionnellement on crée un dossier pour chaque fichier input 
     # on le gère donc ici au lieu de l'orchestrateur
     output_dir.mkdir(parents=True, exist_ok=True)
