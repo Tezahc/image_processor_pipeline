@@ -36,27 +36,31 @@ def check_path(folder_name, root=None):
         # Combiner le chemin relatif avec le chemin racine
         return root_path / path
 
-def _validate_dirs(output_dirs: List[Path]) -> Tuple[Path, Path]:
+def _validate_dirs(output_dirs: List[Path], nb_dirs: int) -> Tuple[Path, Path]:
     """Vérifie que 2 répertoires de sortie sont fournis.
 
     Parameters
     ----------
     output_dirs : List[Path]
         Liste des répertoires de sortie.
+    nb_dirs : int
+        Nombre de répertoires attendus à vérifier
 
     Returns
     -------
-    Tuple[Path, Path]
-        Répertoires pour les images et les labels respectivement.
+    Tuple[Path]
+        Tuple des répertoires fournis.
     
     Raises
     ------
     IndexError
-        Si moins de 2 dossiers sont fournis.
+        Si moins de `nb_dirs` dossiers sont fournis.
     """
-    if len(output_dirs) < 2:
-        raise IndexError(f"Au moins 2 dossiers de sortie requis (images, labels). {len(output_dirs)} fournis.")
-    return Path(output_dirs[0]), Path(output_dirs[1])
+    if len(output_dirs) < nb_dirs:
+        raise IndexError(f"Au moins {nb_dirs} dossiers de sortie requis (images, labels). {len(output_dirs)} fournis.")
+    
+    paths = (Path(dir_) for dir_ in output_dirs)
+    return paths
 
 def _save_crop_files(
     img: np.ndarray,

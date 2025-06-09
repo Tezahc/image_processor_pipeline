@@ -1,7 +1,8 @@
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import Any, List, Tuple, Optional # Pour les annotations de type (optionnel mais recommandé)
+from typing import Any, List, Tuple, Optional
+from image_processor_pipeline.utils.utils import _validate_dirs 
 
 
 def process_images_with_color_masks(
@@ -25,7 +26,7 @@ def process_images_with_color_masks(
                        Par exemple, "prefix_".
     """
     # --- 1. Vérification des arguments et Setup ---
-    output_dir = output_dirs[0]
+    output_dir = _validate_dirs(output_dirs, nb_dirs=1)
 
     if not color_ranges_to_exclude_hsv:
         raise ValueError(f"Erreur [{image_path.name} - ColorMask] : `color_ranges_to_exclude_hsv` est requis pour traiter les données")
@@ -106,6 +107,9 @@ if __name__ == '__main__':
         # (40, 50, 50, 80, 255, 255),
         # 🟩 Vert plus foncé ou désaturé (contours, bordure floue)
         # (40, 30, 120, 70, 180, 200),
+        # (60, 20, 100, 90, 80, 160), # low
+        # (60, 20, 100, 90, 80, 160), # medium
+        (55, 10, 90, 95, 100, 180), # large
         # ⚫ Bords noirs ou très sombres à faible saturation
         # (0, 0, 0, 20, 60, 90),
         # (0, 0, 0, 180, 50, 100),
@@ -118,7 +122,8 @@ if __name__ == '__main__':
         # 🔘 gris clair (#929292)
         # (0, 0, 130, 180, 20, 160)
         # (0, 0, 110, 180, 30, 170)
-        (0, 0, 100, 180, 40, 180)
+        (0, 0, 100, 180, 40, 180),
+        (0, 0, 160, 180, 30, 210)
     ]
 
     # [
@@ -139,3 +144,8 @@ if __name__ == '__main__':
     #     (22, 150, 200, 30, 255, 255) # jaune foncé
     #     # Ajoutez d'autres tuples ici si nécessaire
     # ]
+    process_images_with_color_masks(
+        Path(r"C:\Users\GuillaumeChazet\Documents\ICUREsearch\PiccMid\Training\dataset\H3_4\Videos\DSC_0056\1-crop\H3_4-frame_0270.jpg"),
+        [Path(r"C:\Users\GuillaumeChazet\Documents\ICUREsearch\PiccMid\Training\dataset\H3_4\Videos\DSC_0056")],
+        color_ranges_to_exclude_hsv=colors_to_remove
+    )
