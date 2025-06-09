@@ -64,18 +64,19 @@ def keep_largest_component(
     output_path = output_dir / file.name
 
     try:
-        # success = cv2.imwrite(str(output_path), cleaned_image)
-        cropped_image.save(output_path)
+        cv2.imwrite(str(output_path), cropped_image)
+        # cropped_image.save(output_path)
         return output_path
     except Exception as e_save:
         # Erreur lors de l'écriture (permissions, disque plein, etc.)
         print(f"Erreur [{file.name} - Symétrie]: Échec de sauvegarde pour {output_path.name}: {e_save}")
         return None
     
-def _crop_fit(img: np.ndarray) -> Image.Image:
+def _crop_fit(img: np.ndarray) -> np.ndarray:
     """Convertit une image cv2 et suprimme les bords transparents."""
-    img_rgba = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
-    image = Image.fromarray(img_rgba)
-    box = image.getbbox()
-    crop_image = image.crop(box)
-    return crop_image
+    # Récupères les coordonnées des pixels à valeurs non nulles (non transparentes) du canal alpha
+    non_transparents = cv2.findNonZero(img[:,:,3])
+    # Donne les dimensions du rectangle englobant correspondant
+    x, y, w, h = cv2.boundingRect(non_transparents)
+
+    return img[x:x+w, y:y+h]
