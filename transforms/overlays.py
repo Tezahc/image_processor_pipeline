@@ -76,7 +76,7 @@ def paste_overlay_onto_background(
     ValueError
     """
     # --- 1. Validation des chemins ---
-    image_target_dir, label_target_dir = utils._validate_dirs(output_dirs)
+    image_target_dir, label_target_dir = utils._validate_dirs(output_dirs, nb_dirs=2)
 
     # --- 2. Charger overlay et background ---
     try:

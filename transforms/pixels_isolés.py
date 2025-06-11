@@ -1,8 +1,8 @@
+import cv2
+import numpy as np
 from pathlib import Path
 from typing import List
-import cv2
-from PIL import Image
-import numpy as np
+from image_processor_pipeline.utils.utils import _validate_dirs
 
 
 def keep_largest_component(
@@ -11,8 +11,7 @@ def keep_largest_component(
         min_component_size: int = 500
         ) -> np.ndarray:
     
-    # pas de vérif et on prend le premier (et seul) élément des outputs
-    output_dir = output_dirs[0]
+    output_dir = _validate_dirs(output_dirs, nb_dirs=1)
 
     if file.suffix.lower() != '.png':
         raise ValueError(f"Le fichier {file.name} n'est pas un PNG.")
@@ -79,4 +78,4 @@ def _crop_fit(img: np.ndarray) -> np.ndarray:
     # Donne les dimensions du rectangle englobant correspondant
     x, y, w, h = cv2.boundingRect(non_transparents)
 
-    return img[x:x+w, y:y+h]
+    return img[y:y+h, x:x+w]
