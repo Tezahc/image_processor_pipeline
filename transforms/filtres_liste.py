@@ -19,16 +19,22 @@ def _rescale_filter(filter_tuple: Tuple[int, int, int, int, int, int], use_gimp_
 
     if not use_gimp_scale:
         if any(h > 180 for h in [min_H, max_H]):
-            raise ValueError(f"valeur(s) H ({min_H} - {max_H}) du filtre HSV au format OpenCV non conforme")
-        if any(val <= 100 for val in [min_S, min_V, max_S, max_V]):
+            raise ValueError(f"Valeur(s) H ({min_H} - {max_H}) du filtre HSV au format OpenCV non conforme")
+        if all(val <= 100 for val in [min_S, min_V, max_S, max_V]):
             print(f"Warning : aucune des valeurs S et V du filtre HSV au dessus de 100. ({min_S}, {min_V}, {max_S}, {max_V})."
-                  "les valeurs S et V doivent être comprises entre 0 et 255."
+                  "Vérifiez que votre filtre est au format OpenCV (0-180, 0-255, 0-255)"
                   "Non-bloquant, poursuite du traitement...")
         return filter_tuple
     
-
-    min_H, max_H //= 2
-    min_S, min_V, max_S, max_V *= 2.55
+    if any(sv > 100 for sv in [min_S, min_V, max_S, max_V]):
+        raise ValueError(f"Valeur(s) S et V ({min_S}, {min_V}, {max_S}, {max_V}) au delà des limites admises par GIMP."
+                         "Vérifiez que votre filtre est au format de GIMP (0-360, 0-100, 0-100)")
+    min_H //= 2
+    max_H //= 2
+    min_S *= 2.55
+    min_V *= 2.55
+    max_S *= 2.55
+    max_V *= 2.55
 
     return min_H, min_S, min_V, max_H, max_S, max_V
 
