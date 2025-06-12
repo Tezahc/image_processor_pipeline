@@ -9,6 +9,7 @@ def process_images_with_color_masks(
     image_path: Path,
     output_dirs: List[Path],
     color_ranges_to_exclude_hsv: List[Tuple[int, int, int, int, int, int]],
+    zones: List[Tuple[int, int, int, int] | None] | None = None,
     output_prefix: str = "",
     **options: Any
 ) -> Optional[Path]:
@@ -22,6 +23,9 @@ def process_images_with_color_masks(
         color_ranges_to_exclude_hsv: Une liste de tuples. Chaque tuple contient 6 entiers
             représentant les bornes HSV d'une couleur à exclure :
             (min_H, min_S, min_V, max_H, max_S, max_V).
+        zones: Zones de l'image où appliquer les filtres colorimétriques. Correspond à des marges de crop **(top, bottom, left, right)**.  
+            Doit être de même dimension que `color_ranges_to_exclude_hsv`.  
+            si une zone est définie comme `None`, le filtre est appliqué sur la totalité de l'image.
         output_prefix: Un préfixe optionnel à ajouter au nom de chaque fichier de sortie.
                        Par exemple, "prefix_".
     """
@@ -30,6 +34,12 @@ def process_images_with_color_masks(
 
     if not color_ranges_to_exclude_hsv:
         raise ValueError(f"Erreur [{image_path.name} - ColorMask] : `color_ranges_to_exclude_hsv` est requis pour traiter les données")
+    
+    # S'assure que `zones` est de même longueur que les filtres
+    if zones and len(zones) != len(color_ranges_to_exclude_hsv):
+        raise ValueError(f"Les zones d'application des filtres colorimétriques ({len(zones)}) ne correspondent pas aux filtres ({len(color_ranges_to_exclude_hsv)}). Les 2 paramètres doivent être de même longueur !.")
+    elif not zones:
+        zones = [None] * len(color_ranges_to_exclude_hsv)
     
     # --- 2. Lecture de l'image ---
     image = cv2.imread(str(image_path))
@@ -45,13 +55,23 @@ def process_images_with_color_masks(
     combined_mask_to_exclude = np.zeros((hsv.shape[0], hsv.shape[1]), dtype=np.uint8)
 
     # Boucler sur chaque plage de couleur à exclure
-    for h_min, s_min, v_min, h_max, s_max, v_max in color_ranges_to_exclude_hsv:
+    for filter, zone in zip(color_ranges_to_exclude_hsv, zones):
+        h_min, s_min, v_min, h_max, s_max, v_max = filter
+        z_top, z_bottom, z_left, z_right = zone if zone else (0, 0, 0, 0)
+
+        # crée un masque sur la zone définie
+        zone_mask = np.zeros_like(hsv[...,0], dtype=np.uint8)
+        zone_mask[z_top : hsv.shape[0] - z_bottom, z_left : hsv.shape[1] - z_right] = 255
+
         # Définir les bornes numpy pour la plage actuelle
         lower_bound = np.array([h_min, s_min, v_min])
         upper_bound = np.array([h_max, s_max, v_max])
 
         # Créer le masque pour cette plage de couleur spécifique
         current_color_mask = cv2.inRange(hsv, lower_bound, upper_bound)
+        # L'applique uniquement sur la zone prescrite
+        full_mask = cv2.inRange(hsv, lower_bound, upper_bound)
+        current_color_mask = cv2.bitwise_and(full_mask, zone_mask)
 
         # Ajouter (OU logique) ce masque au masque combiné
         # Les pixels correspondant à *n'importe laquelle* des plages seront blancs
@@ -109,7 +129,7 @@ if __name__ == '__main__':
         # (40, 30, 120, 70, 180, 200),
         # (60, 20, 100, 90, 80, 160), # low
         # (60, 20, 100, 90, 80, 160), # medium
-        (55, 10, 90, 95, 100, 180), # large
+        # (55, 10, 90, 95, 100, 180), # large
         # ⚫ Bords noirs ou très sombres à faible saturation
         # (0, 0, 0, 20, 60, 90),
         # (0, 0, 0, 180, 50, 100),
@@ -122,8 +142,13 @@ if __name__ == '__main__':
         # 🔘 gris clair (#929292)
         # (0, 0, 130, 180, 20, 160)
         # (0, 0, 110, 180, 30, 170)
-        (0, 0, 100, 180, 40, 180),
-        (0, 0, 160, 180, 30, 210)
+        # (0, 0, 100, 180, 40, 180),
+        # (0, 0, 160, 180, 30, 210)
+        (0, 0, 0, 180, 255, 150),
+        # (15, 70, 200, 35, 210, 255),
+        (15, 60, 200, 35, 255, 255),
+        (15, 30*2.55, 55*2.55, 30, 60*2.55, 80*2.55),
+        (15, 60*2.55, 60*2.55, 30, 75*2.55, 90*2.55)
     ]
 
     # [
@@ -145,7 +170,13 @@ if __name__ == '__main__':
     #     # Ajoutez d'autres tuples ici si nécessaire
     # ]
     process_images_with_color_masks(
-        Path(r"C:\Users\GuillaumeChazet\Documents\ICUREsearch\PiccMid\Training\dataset\H3_4\Videos\DSC_0056\1-crop\H3_4-frame_0270.jpg"),
-        [Path(r"C:\Users\GuillaumeChazet\Documents\ICUREsearch\PiccMid\Training\dataset\H3_4\Videos\DSC_0056")],
-        color_ranges_to_exclude_hsv=colors_to_remove
+        Path("C:/Users/GuillaumeChazet/Documents/ICUREsearch/PiccMid/Training/dataset/H1_4/Videos/DSC_0067/0-raw/H1_4-frame_0032.jpg"),
+        [Path("C:/Users/GuillaumeChazet/Documents/ICUREsearch/PiccMid/Training/dataset/H1_4/Videos/DSC_0067")],
+        color_ranges_to_exclude_hsv=colors_to_remove,
+        zones=[
+            (0,0,0,0),
+            (0,0,0,0),
+            (0,0,0,0),
+            (0,0,0,0)
+        ]
     )
