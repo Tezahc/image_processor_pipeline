@@ -5,11 +5,39 @@ from typing import Any, List, Tuple, Optional
 from image_processor_pipeline.utils.utils import _validate_dirs 
 
 
+def _rescale_filter(filter_tuple: Tuple[int, int, int, int, int, int], use_gimp_scale: bool = False):
+    """Réajuste les échelles des filtres HSV de Gimp vers OpenCV si besoin
+
+    Parameters
+    ----------
+    filter_tuple : Tuple[int, int, int, int, int, int]
+        le tuple du filtre à convertir. Attend le format **(H_min, S_min, V_min, H_max, S_max, V_max)**
+    use_gimp_scale : bool, optional
+        Si la conversion est nécessaire. Sinon, considère que les valeurs sont déjà au bon format., by default False
+    """
+    min_H, min_S, min_V, max_H, max_S, max_V = filter_tuple
+
+    if not use_gimp_scale:
+        if any(h > 180 for h in [min_H, max_H]):
+            raise ValueError(f"valeur(s) H ({min_H} - {max_H}) du filtre HSV au format OpenCV non conforme")
+        if any(val <= 100 for val in [min_S, min_V, max_S, max_V]):
+            print(f"Warning : aucune des valeurs S et V du filtre HSV au dessus de 100. ({min_S}, {min_V}, {max_S}, {max_V})."
+                  "les valeurs S et V doivent être comprises entre 0 et 255."
+                  "Non-bloquant, poursuite du traitement...")
+        return filter_tuple
+    
+
+    min_H, max_H //= 2
+    min_S, min_V, max_S, max_V *= 2.55
+
+    return min_H, min_S, min_V, max_H, max_S, max_V
+
 def process_images_with_color_masks(
     image_path: Path,
     output_dirs: List[Path],
     color_ranges_to_exclude_hsv: List[Tuple[int, int, int, int, int, int]],
     zones: List[Tuple[int, int, int, int] | None] | None = None,
+    use_gimp_scale: bool = False,
     output_prefix: str = "",
     **options: Any
 ) -> Optional[Path]:
@@ -26,6 +54,11 @@ def process_images_with_color_masks(
         zones: Zones de l'image où appliquer les filtres colorimétriques. Correspond à des marges de crop **(top, bottom, left, right)**.  
             Doit être de même dimension que `color_ranges_to_exclude_hsv`.  
             si une zone est définie comme `None`, le filtre est appliqué sur la totalité de l'image.
+        use_gimp_scale: Si `True`, permet de renseigner les valeurs hsv comme trouvées dans GIMP telles que
+            - **H** : 0-360°
+            - **S** : 0-100%
+            - **V** : 0-100%
+            par défaut (False), considère que les valeurs sont au format d'OpenCV
         output_prefix: Un préfixe optionnel à ajouter au nom de chaque fichier de sortie.
                        Par exemple, "prefix_".
     """
@@ -56,7 +89,7 @@ def process_images_with_color_masks(
 
     # Boucler sur chaque plage de couleur à exclure
     for filter, zone in zip(color_ranges_to_exclude_hsv, zones):
-        h_min, s_min, v_min, h_max, s_max, v_max = filter
+        h_min, s_min, v_min, h_max, s_max, v_max = _rescale_filter(filter, use_gimp_scale)
         z_top, z_bottom, z_left, z_right = zone if zone else (0, 0, 0, 0)
 
         # crée un masque sur la zone définie
