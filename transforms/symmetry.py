@@ -2,6 +2,7 @@ import cv2
 import random
 from pathlib import Path
 from typing import Any, List, Literal, Optional
+from ultralytics.data.utils import IMG_FORMATS
 from warnings import warn
 
 ALL_SYMS = ('o', 'h', 'v', 'hv')
@@ -88,9 +89,9 @@ def generate_symmetries(
         raise ValueError(f"Erreur [{input_path.name} - Symétrie]: Aucun dossier de sortie ('output_dirs') fourni.")
     output_dir = output_dirs[0]
 
-    if input_path.suffix.lower() != '.png':
+    if input_path.suffix.lower()[1:] not in IMG_FORMATS:
         # Peut-être ouvrir à tout type d'image ?
-        raise ValueError(f"Le fichier {input_path.name} n'est pas un PNG.")
+        raise ValueError(f"Le fichier {input_path.name} n'est pas un format accepté par Yolo.")
 
     # Valider le pool si fourni
     pool = pool if pool else list(ALL_SYMS)
