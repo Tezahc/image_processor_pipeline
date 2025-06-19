@@ -200,7 +200,27 @@ class ProcessingStep:
             for i, path1 in enumerate(list1):
                 path2 = list2[i % list2_len]
                 yield (path1, path2)
+        
+        elif self.pairing_method == 'sampling':
+            # méthode spécifique pour l'étape de transformation
+            # TODO: à généraliser ?
 
+            input_files = input_file_lists[0]
+            input_labels = input_file_lists[1]
+
+            # Sample un set des fichiers où appliquer la transfo
+            blur_sample = set(random.sample(input_files, int(len(input_files)*0.3)))
+            # Crée une liste de booléens (donnés en paramètres d'input) 
+            # Indiquant si l'élément évalué doit subir la transformation
+            do_blur = [i in blur_sample for i in input_files]
+
+            # idem pour la transfo RGB
+            rgb_sample = set(random.sample(input_files, int(len(input_files)*0.3)))
+            do_rgb = [i in rgb_sample for i in input_files]
+
+            yield from zip(input_files, input_labels, do_blur, do_rgb)
+
+        
         elif self.pairing_method == 'custom':
             if not self.pairing_function:
                 raise ValueError("Fonction `pairing_function` manquante pour le mode 'custom'.")
