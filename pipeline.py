@@ -201,12 +201,11 @@ class ProcessingStep:
                 path2 = list2[i % list2_len]
                 yield (path1, path2)
         
-        elif self.pairing_method == 'sampling':
+        elif self.pairing_method == 'sample':
             # méthode spécifique pour l'étape de transformation
             # TODO: à généraliser ?
 
             input_files = input_file_lists[0]
-            input_labels = input_file_lists[1]
 
             # Sample un set des fichiers où appliquer la transfo
             blur_sample = set(random.sample(input_files, int(len(input_files)*0.3)))
@@ -218,7 +217,7 @@ class ProcessingStep:
             rgb_sample = set(random.sample(input_files, int(len(input_files)*0.3)))
             do_rgb = [i in rgb_sample for i in input_files]
 
-            yield from zip(input_files, input_labels, do_blur, do_rgb)
+            yield from zip(input_files, do_blur, do_rgb)
 
         
         elif self.pairing_method == 'custom':

@@ -8,7 +8,6 @@ from image_processor_pipeline.utils.utils import _validate_dirs
 
 def enhance_image(
     input_image: Path,
-    input_label: Path,
     apply_blur: bool,
     apply_rgb: bool,
     output_dirs: List[Path],
@@ -20,8 +19,6 @@ def enhance_image(
     ----------
     input_image : Path
         Chemin du fichier image à transformer
-    input_label : Path
-        Chemin du fichier d'annotation (.txt) associé à l'image. sera simplement copié.
     apply_blur : bool
         Booléen renvoyé par le générateur selon le taux de sampling (30%) si le blur deoit être appliqué
     apply_rgb : bool
@@ -35,6 +32,7 @@ def enhance_image(
         Chemins enregistrés si succès
     """
     destination_img, destination_lbl = _validate_dirs(output_dirs, 2)
+    output_path = destination_img / input_image.name
     
     with Image.open(input_image).convert("RGB") as img:
         img = ImageEnhance.Brightness(img).enhance(random.uniform(0.7, 1.3))
@@ -52,9 +50,6 @@ def enhance_image(
             b = b.point(lambda p: max(0, min(255, p * random.uniform(0.75, 1.25))))
             img = Image.merge("RGB", (r, g, b))
         
-        output_path = destination_img / input_image.name
         img.save(output_path)
     
-    label_save = shutil.copy(input_label, destination_lbl)
-
-    return output_path, Path(label_save)
+    return output_path
