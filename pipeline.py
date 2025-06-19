@@ -7,7 +7,7 @@ from warnings import warn
 from tqdm.notebook import tqdm
 import random
 
-MODES = ('one_input', 'zip', 'modulo', 'custom')
+MODES = ('one_input', 'zip', 'modulo', 'sample', 'custom')
 
 
 class ProcessingStep:
@@ -37,7 +37,7 @@ class ProcessingStep:
             input_dirs (List): Liste des chemins des dossiers d'entrée (relatifs ou absolus).
             output_dirs (List): Liste des chemins des dossiers de sortie (relatifs ou absolus).
             pairing_method (PairingMethod): Comment combiner les fichiers des input_dirs.
-                Options: 'one_input' (défaut), 'zip', 'modulo', 'custom'.
+                Options: 'one_input' (défaut), 'zip', 'modulo', 'sample', 'custom'.
             pairing_function (Callable): Requis si method='custom'. Voir doc _generate_processing_args.
             fixed_input (Bool): TODO: ajouter description déjà écrite ailleurs...
                                 TODO 2 : prendre en charge le fixed_input avec les listes de dossiers -> liste de bool ? oO
