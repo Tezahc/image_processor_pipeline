@@ -172,7 +172,8 @@ def paste_overlay_onto_background(
         with open(label_output_path, 'w', encoding='utf-8') as f:
             f.write(yolo_label_str)
         saved_paths.append(label_output_path)
-
+        # renvoi du chemin du background utilisé
+        saved_paths.append(background_path) 
         # --- 7. Retourner la liste des DEUX chemins ---
         return saved_paths
 

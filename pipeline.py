@@ -1,3 +1,4 @@
+import json
 import concurrent
 import concurrent.futures
 from os import cpu_count
@@ -279,10 +280,23 @@ class ProcessingStep:
         # --------------------------------------------------------------------------------------------
 
         processed_count, errors_count = self._processing_loop(argument_iterator, total_items)
-
+        # enregistrement des chemins de sauvegarde des fichiers
+        serial_processed_count = [
+            [str(p) for p in sous_liste] 
+            if isinstance(sous_liste, list) 
+            else str(sous_liste)
+            for sous_liste in processed_count
+        ]
+        save_outputs = self.output_paths[0] / Path(self.name).with_suffix(".json")
+        try:
+            with save_outputs.open("w", encoding="utf-8") as s:
+                json.dump(serial_processed_count, s, indent=4, ensure_ascii=False)
+        except:
+            print(f"Erreur lors de l'enregistrement du fichier JSON des chemins de sauvegardes de la tâche en cours")
+        
         # TODO: intégrer le timings (quoique, avec tqdm.... :pray:)
         print(f"--- Étape {self.name} terminée ---") 
-        print(f"  {processed_count} éléments traités avec succès (fichiers de sortie générés).")
+        print(f"  {len(processed_count)} éléments traités avec succès (fichiers de sortie générés).")
         if errors_count > 0:
             print(f"  {errors_count} erreur(s) ou traitement(s) sans retour.")
 
@@ -292,7 +306,7 @@ class ProcessingStep:
         """Exécute la boucle de traitement principale, soit en séquentiel, soit en parallèle.
         Met à jour self.processed_files_map et retourne les compteurs.
         """
-        processed_count = 0
+        processed_count = []
         error_count = 0
 
         # --- Logique Séquentielle ---
@@ -322,7 +336,7 @@ class ProcessingStep:
                         if isinstance(saved_output_paths, Path) or \
                            (isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths)):
                             self.processed_files_map[input_key] = saved_output_paths
-                            processed_count += 1
+                            processed_count.append(saved_output_paths)
                         else:
                             # TODO: utiliser des vrais warn ou système de logging
                             tqdm.write(f"Avertissement [{self.name}]: Retour invalide de {self.process_function} pour {input_key} (type: {type(saved_output_paths)}).")
@@ -383,7 +397,7 @@ class ProcessingStep:
                             if isinstance(saved_output_paths, Path) or \
                                (isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths)):
                                 self.processed_files_map[input_key] = saved_output_paths
-                                processed_count += 1
+                                processed_count.append(saved_output_paths)
                             else:
                                 tqdm.write(f"Avertissement [{self.name}]: Retour invalide (parallèle) pour {input_key} (type: {type(saved_output_paths)}).")
                                 errors_count += 1
