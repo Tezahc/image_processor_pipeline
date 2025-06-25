@@ -280,6 +280,8 @@ class ProcessingStep:
         # --------------------------------------------------------------------------------------------
 
         processed_count, errors_count = self._processing_loop(argument_iterator, total_items)
+        # TODO: déduire success/error count à partir de self.processed_files_map (à rename btw)
+        # TODO: voir la pertinence de processed_files_map avec un vrai système de logging avec option d'output structuré (le json qu'on s'emmerde à build là)
 
         # enregistrement des chemins de sauvegarde des fichiers
         if self.processed_files_map:
