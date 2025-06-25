@@ -59,7 +59,7 @@ def copy_files(
         out = shutil.copy2(input_file, output_name)
     # Remplace une partie du nom
     elif replace_params:
-        output_name = output_dir / input_file.name.replace(replace_params[1], replace_params[1])
+        output_name = output_dir / input_file.name.replace(replace_params[0], replace_params[1])
         out = shutil.copy2(input_file, output_name)
     else:
         out = shutil.copy2(input_file, output_dir)

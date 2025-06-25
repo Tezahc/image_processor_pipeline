@@ -31,7 +31,7 @@ def enhance_image(
     Optional[Path]
         Chemins enregistrés si succès
     """
-    destination_img, destination_lbl = _validate_dirs(output_dirs, 2)
+    destination_img = _validate_dirs(output_dirs, 1)
     output_path = destination_img / input_image.name
     
     with Image.open(input_image).convert("RGB") as img:
