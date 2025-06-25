@@ -312,8 +312,8 @@ class ProcessingStep:
                                          leave=True, 
                                          smoothing=0):
                 log_entry: Dict[str, Any] = {
-                    "input_paths": list(input_args_tuple), 
-                    "output_paths": None,
+                    "inputs": list(input_args_tuple), 
+                    "outputs": None,
                     "status": "Pending",
                     "error_message": None, 
                     # "options_used": self.process_kwargs.copy()
@@ -326,40 +326,20 @@ class ProcessingStep:
                         output_dirs=self.output_paths,  # liste des dossiers de sortie
                         **self.process_kwargs           # Passage des options en kwargs
                     )
-
-                    # Vérification du retour de la fonction de traitement
-                    if saved_output_paths:
-                        # on vérifie qu'on a bien un type Path (ou liste de paths)
-                        if isinstance(saved_output_paths, Path):
-                            log_entry["output_paths"] = [saved_output_paths]  # on force une liste
-                            log_entry["status"] = "Success"
-                            success_count += 1
-                        elif isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths):
-                            log_entry["output_paths"] = saved_output_paths
-                            log_entry["status"] = "Success"
-                            success_count += 1
-                        else:
-                            # Type de retour inattendu
-                            warn_msg = (f"Avertissement [{self.name}] : Retour invalide de {self.process_function.__name__} pour"
-                                        f"{input_args_tuple} (type : {type(saved_output_paths)}). "
-                                        f"Attendu `Path`, `List[Path] ou None`.")
-                            
-                            # TODO: utiliser des vrais warn ou système de logging
-                            tqdm.write(warn_msg)
-                            log_entry["status"] = "Type_Error"
-                            log_entry["error_message"] = warn_msg
-                            error_count += 1
-                    else:
-                        # la fonction a retourné None (échec géré ou rien à sauvegarder)
-                        log_entry["status"] = "no_output"
+                    # Met à jour le log
+                    success = self._build_log(log_entry, saved_output_paths, input_args_tuple)
+                    if success:
+                        success_count += 1
+                    else: 
                         error_count += 1
-                        # Option : logger l'entrée qui n'a rien produit
                 
                 except Exception as e_proc:
                     # Erreur innatendue dans process_function ou lors de l'appel
                     tqdm.write(f"\nErreur [{self.name}]: Échec traitement de {input_args_tuple}: {e_proc}")
-                    log_entry["status"] = "Error"
-                    log_entry["error_message"] = str(e_proc)
+                    log_entry.update({
+                        "status" : "Error",
+                        "error_message" : str(e_proc)
+                    })
                     error_count += 1
 
                 # Ajout de l'entrée de log
@@ -373,6 +353,7 @@ class ProcessingStep:
 
             list_of_input_args = list(argument_iterator)
             if not list_of_input_args:
+                # NOTE: gemini n'aime pas le raise ici, il préfère print et return (0, 0)
                 raise RuntimeError(f"Aucun argument à traiter après génération. Fin.")
             
             # Mettre à jour total_item si l'itérateur a été consomé
@@ -387,8 +368,11 @@ class ProcessingStep:
                 for input_args_tuple in list_of_input_args:
                     # pré-créer une partie de l'entrée log pour l'associer au future
                     # l'output et le statut seront mis à jour plus tard
-                    init_log_entry = {
-                        "input_paths" : list(input_args_tuple),
+                    log_entry = {
+                        "inputs" : list(input_args_tuple),
+                        "outputs" : None, 
+                        "status" : "Pending Execution",
+                        "error_message" : None,
                         # "options_used" : self.process_kwargs.copy()
                     }
                     try:
@@ -398,16 +382,13 @@ class ProcessingStep:
                             output_dirs=self.output_paths,
                             **self.process_kwargs
                         )
-                        future_to_log[future] = init_log_entry
+                        future_to_log[future] = log_entry
                     except Exception as e_submit:
                         tqdm.write(f"Erreur [{self.name}]: Échec de la soumission de la tâche pour {input_args_tuple}: {e_submit}")
-                        log_entry = {
-                            "input_paths" : list(input_args_tuple),
-                            "output_paths" : None,
+                        log_entry.update({
                             "status" : "Submission Error",
-                            "error_message" : str(e_submit),
-                            "options_used" : self.process_kwargs.copy()
-                        }
+                            "error_message" : str(e_submit)
+                        })
                         self.processed_files_map.append(log_entry)
                         error_count += 1
                 
@@ -419,37 +400,22 @@ class ProcessingStep:
                                    smoothing=0):
                     # Récupère les args d'origine pour ce future
                     log_entry = future_to_log[future] 
-                    log_entry["output_paths"] = None,
-                    log_entry["status"] = "Pending",
-                    log_entry["error_message"] = None
 
                     try:
                         saved_output_paths: Optional[Path | List[Path]] = future.result() # Bloque jusqu'à résultat
-
-                        if saved_output_paths:
-                            if isinstance(saved_output_paths, Path) :
-                                log_entry["output_paths"] = [saved_output_paths]
-                                log_entry["status"] = "Success"
-                                success_count += 1
-                            elif isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths):
-                                log_entry["output_paths"] = saved_output_paths
-                                log_entry["status"] = "Success"
-                                success_count += 1
-                            else:
-                                warn_msg = (f"Retour invalide (parallèle) de {self.process_function.__name__} pour "
-                                            f"{[str(p) for p in log_entry["input_paths"]]} (type : {type(saved_output_paths)}).")
-                                tqdm.write(warn_msg)
-                                log_entry["status"] = "Type Error"
-                                log_entry["error_message"] = warn_msg
-                                errors_count += 1
+                        success = self._build_log(log_entry, saved_output_paths, log_entry["inputs"])
+                        if success:
+                            success_count += 1
                         else:
-                            log_entry["status"] = "no_output"
-                            errors_count += 1
+                            error_count += 1
+                    
                     except Exception as e_exec: # Erreur DANS le processus enfant
-                        error_msg = f"Échec tâche parallèle pour {[str(p) for p in log_entry["input_paths"]]} : {e_exec}"
+                        error_msg = f"Échec tâche parallèle pour {[str(p) for p in log_entry["inputs"]]} : {e_exec}"
                         tqdm.write(f"\nErreur [{self.name}]: {error_msg}")
-                        log_entry["status"] = "Error"
-                        log_entry["error_message"] = error_msg
+                        log_entry.update({
+                            "status" : "Error",
+                            "error_message" : error_msg
+                        })
                         # import traceback; tqdm.write(traceback.format_exc()) # Pour debug
                         errors_count += 1
 
@@ -459,6 +425,41 @@ class ProcessingStep:
         
         else:
             raise ValueError(f"")
+
+    def _build_log(self,
+                   log_entry: Dict[str, Any],
+                   saved_output_paths: Optional[Path | List[Path]],
+                   input_id: Any
+                   ) -> bool:
+        """Met à jour un log_entry avec le résultat de `process_function`. Modifie le log entry directement."""
+        if saved_output_paths:
+            if isinstance(saved_output_paths, Path):
+                # TODO: ptet forcer à output une liste de Path finalement ? (dans la process_function j'entends).
+                log_entry.update({
+                    "outputs" : [saved_output_paths],
+                    "status" : "Success"
+                })
+                return True
+            elif isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths):
+                log_entry.update({
+                    "outputs" : saved_output_paths,
+                    "status" : "Success"
+                })
+                return True
+            else:
+                warn_msg = (f"Retour invalide (parallèle) de {self.process_function.__name__} pour "
+                            f"{[str(p) for p in log_entry["inputs"]]} (type : {type(saved_output_paths)})."
+                            "Attendu Path, List[Path] ou None.")
+                warn(warn_msg)
+                log_entry.update({
+                    "status" : "Type Error",
+                    "error_message" : warn_msg
+                })
+                return False
+        else:
+            log_entry["status"] = "no_output"
+            return False
+
 
     def _save_processed_map_to_json(self) -> None:
         """Sauvegarde la liste des logs de traitement dans un fichier JSON,
