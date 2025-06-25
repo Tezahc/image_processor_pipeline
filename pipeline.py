@@ -3,7 +3,7 @@ import concurrent
 import concurrent.futures
 from os import cpu_count
 from pathlib import Path
-from typing import Callable, List, Dict, Optional, Tuple, Iterator, Literal
+from typing import Any, Callable, List, Dict, Optional, Tuple, Iterator, Literal
 from warnings import warn
 from tqdm.notebook import tqdm
 import random
@@ -76,7 +76,7 @@ class ProcessingStep:
         self.pairing_function = pairing_function
 
         # Map pour suivre les sorties générées par entrée(s)
-        self.processed_files_map: Dict[Tuple[Path, ...], Path | List[Path]] = {}  # Clé est tuple de Path d'entrée
+        self.processed_files_map: List[Dict[str, Any]] = []
 
         # Gestion de la parallélisation
         nb_cpus = cpu_count()
@@ -260,7 +260,7 @@ class ProcessingStep:
         # 3. Obtenir l'itérateur d'arguments
         try:
             argument_iterator = self._generate_processing_inputs(input_file_lists)
-            # TODO et si le mode du générateur renvoyait un tuple avec le total d'opération ? (pout tqdm tsé 👀) 
+            # TODO et si le mode du générateur renvoyait un tuple avec le total d'opération ? (pour tqdm tsé 👀) 
             # => solution : créer une classe générator qui yield comme la méthode et possède un attribut .total
         except (ValueError, NotImplementedError) as e:
             print(f"Erreur [{self.name}]: Impossible de générer les arguments pour le mode '{self.pairing_method}'. {e}")
@@ -280,19 +280,12 @@ class ProcessingStep:
         # --------------------------------------------------------------------------------------------
 
         processed_count, errors_count = self._processing_loop(argument_iterator, total_items)
+
         # enregistrement des chemins de sauvegarde des fichiers
-        serial_processed_count = [
-            [str(p) for p in sous_liste] 
-            if isinstance(sous_liste, list) 
-            else str(sous_liste)
-            for sous_liste in processed_count
-        ]
-        save_outputs = self.output_paths[0] / Path(self.name).with_suffix(".json")
-        try:
-            with save_outputs.open("w", encoding="utf-8") as s:
-                json.dump(serial_processed_count, s, indent=4, ensure_ascii=False)
-        except:
-            print(f"Erreur lors de l'enregistrement du fichier JSON des chemins de sauvegardes de la tâche en cours")
+        if self.processed_files_map:
+            self._save_processed_map_to_json()
+        else:
+            print(f"Info [{self.name}] : Aucun log de traitement généré.")
         
         # TODO: intégrer le timings (quoique, avec tqdm.... :pray:)
         print(f"--- Étape {self.name} terminée ---") 
@@ -306,7 +299,7 @@ class ProcessingStep:
         """Exécute la boucle de traitement principale, soit en séquentiel, soit en parallèle.
         Met à jour self.processed_files_map et retourne les compteurs.
         """
-        processed_count = []
+        success_count = 0
         error_count = 0
 
         # --- Logique Séquentielle ---
@@ -318,10 +311,15 @@ class ProcessingStep:
                                          unit="item", 
                                          leave=True, 
                                          smoothing=0):
-                try:
-                    # Clé pour le suivi
-                    input_key = input_args_tuple
+                log_entry: Dict[str, Any] = {
+                    "input_paths": list(input_args_tuple), 
+                    "output_paths": None,
+                    "status": "Pending",
+                    "error_message": None, 
+                    # "options_used": self.process_kwargs.copy()
+                }
 
+                try:
                     # Appel de la fonction de traitement
                     saved_output_paths: Optional[Path | List[Path]] = self.process_function(
                         *input_args_tuple,              # Dépaquette les chemins d'entrée
@@ -332,24 +330,42 @@ class ProcessingStep:
                     # Vérification du retour de la fonction de traitement
                     if saved_output_paths:
                         # on vérifie qu'on a bien un type Path (ou liste de paths)
-                        # utilité ? 
-                        if isinstance(saved_output_paths, Path) or \
-                           (isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths)):
-                            self.processed_files_map[input_key] = saved_output_paths
-                            processed_count.append(saved_output_paths)
+                        if isinstance(saved_output_paths, Path):
+                            log_entry["output_paths"] = [saved_output_paths]  # on force une liste
+                            log_entry["status"] = "Success"
+                            success_count += 1
+                        elif isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths):
+                            log_entry["output_paths"] = saved_output_paths
+                            log_entry["status"] = "Success"
+                            success_count += 1
                         else:
+                            # Type de retour inattendu
+                            warn_msg = (f"Avertissement [{self.name}] : Retour invalide de {self.process_function.__name__} pour"
+                                        f"{input_args_tuple} (type : {type(saved_output_paths)}). "
+                                        f"Attendu `Path`, `List[Path] ou None`.")
+                            
                             # TODO: utiliser des vrais warn ou système de logging
-                            tqdm.write(f"Avertissement [{self.name}]: Retour invalide de {self.process_function} pour {input_key} (type: {type(saved_output_paths)}).")
+                            tqdm.write(warn_msg)
+                            log_entry["status"] = "Type_Error"
+                            log_entry["error_message"] = warn_msg
                             error_count += 1
                     else:
                         # la fonction a retourné None (échec géré ou rien à sauvegarder)
+                        log_entry["status"] = "no_output"
                         error_count += 1
                         # Option : logger l'entrée qui n'a rien produit
+                
                 except Exception as e_proc:
                     # Erreur innatendue dans process_function ou lors de l'appel
                     tqdm.write(f"\nErreur [{self.name}]: Échec traitement de {input_args_tuple}: {e_proc}")
+                    log_entry["status"] = "Error"
+                    log_entry["error_message"] = str(e_proc)
                     error_count += 1
-            return processed_count, error_count
+
+                # Ajout de l'entrée de log
+                self.processed_files_map.append(log_entry)
+
+            return success_count, error_count
         
         # --- Logique Parallèle --- 
         elif self.parallels_workers > 1 or self.parallels_workers == -1:
@@ -365,10 +381,16 @@ class ProcessingStep:
             
             with concurrent.futures.ProcessPoolExecutor(max_workers=self.parallels_workers) as executor:
                 # Dictionnaire pour mapper les futures aux arguments d'entrée (pour le logging d'erreur)
-                future_to_args: Dict[concurrent.futures.Future, Tuple[Path, ...]] = {}
+                future_to_log: Dict[concurrent.futures.Future, Dict[str, Any]] = {}
 
                 print(f"Info [{self.name}]: Soumission de {len(list_of_input_args)} tâches au pool de processus...")
                 for input_args_tuple in list_of_input_args:
+                    # pré-créer une partie de l'entrée log pour l'associer au future
+                    # l'output et le statut seront mis à jour plus tard
+                    init_log_entry = {
+                        "input_paths" : list(input_args_tuple),
+                        # "options_used" : self.process_kwargs.copy()
+                    }
                     try:
                         future = executor.submit(
                             self.process_function,
@@ -376,41 +398,95 @@ class ProcessingStep:
                             output_dirs=self.output_paths,
                             **self.process_kwargs
                         )
-                        future_to_args[future] = input_args_tuple
+                        future_to_log[future] = init_log_entry
                     except Exception as e_submit:
                         tqdm.write(f"Erreur [{self.name}]: Échec de la soumission de la tâche pour {input_args_tuple}: {e_submit}")
+                        log_entry = {
+                            "input_paths" : list(input_args_tuple),
+                            "output_paths" : None,
+                            "status" : "Submission Error",
+                            "error_message" : str(e_submit),
+                            "options_used" : self.process_kwargs.copy()
+                        }
+                        self.processed_files_map.append(log_entry)
                         error_count += 1
                 
-                for future in tqdm(concurrent.futures.as_completed(future_to_args.keys()),
-                                   total=len(future_to_args),
+                for future in tqdm(concurrent.futures.as_completed(future_to_log.keys()),
+                                   total=len(future_to_log),
                                    desc=self.name,
                                    unit="item",
                                    leave=True,
                                    smoothing=0):
                     # Récupère les args d'origine pour ce future
-                    input_key = future_to_args[future] 
+                    log_entry = future_to_log[future] 
+                    log_entry["output_paths"] = None,
+                    log_entry["status"] = "Pending",
+                    log_entry["error_message"] = None
 
                     try:
                         saved_output_paths: Optional[Path | List[Path]] = future.result() # Bloque jusqu'à résultat
 
                         if saved_output_paths:
-                            if isinstance(saved_output_paths, Path) or \
-                               (isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths)):
-                                self.processed_files_map[input_key] = saved_output_paths
-                                processed_count.append(saved_output_paths)
+                            if isinstance(saved_output_paths, Path) :
+                                log_entry["output_paths"] = [saved_output_paths]
+                                log_entry["status"] = "Success"
+                                success_count += 1
+                            elif isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths):
+                                log_entry["output_paths"] = saved_output_paths
+                                log_entry["status"] = "Success"
+                                success_count += 1
                             else:
-                                tqdm.write(f"Avertissement [{self.name}]: Retour invalide (parallèle) pour {input_key} (type: {type(saved_output_paths)}).")
+                                warn_msg = (f"Retour invalide (parallèle) de {self.process_function.__name__} pour "
+                                            f"{[str(p) for p in log_entry["input_paths"]]} (type : {type(saved_output_paths)}).")
+                                tqdm.write(warn_msg)
+                                log_entry["status"] = "Type Error"
+                                log_entry["error_message"] = warn_msg
                                 errors_count += 1
                         else:
+                            log_entry["status"] = "no_output"
                             errors_count += 1
                     except Exception as e_exec: # Erreur DANS le processus enfant
-                        tqdm.write(f"\nErreur [{self.name}]: Échec tâche parallèle pour {input_key}: {e_exec}")
+                        error_msg = f"Échec tâche parallèle pour {[str(p) for p in log_entry["input_paths"]]} : {e_exec}"
+                        tqdm.write(f"\nErreur [{self.name}]: {error_msg}")
+                        log_entry["status"] = "Error"
+                        log_entry["error_message"] = error_msg
                         # import traceback; tqdm.write(traceback.format_exc()) # Pour debug
                         errors_count += 1
-            return processed_count, error_count
+
+                    self.processed_files_map.append(log_entry)
+            
+            return success_count, error_count
         
         else:
             raise ValueError(f"")
+
+    def _save_processed_map_to_json(self) -> None:
+        """Sauvegarde la liste des logs de traitement dans un fichier JSON,
+        en utilisant un encodeur personnalisé pour les objets Path.
+        Le fichier JSON est placé dans le premier dossier de sortie et porte le nom de l'étape.
+        """
+        if not self.output_paths:
+            warn(f"Avertissement [{self.name}] : Aucun dossier de sortie configuré."
+                 "Enregistrement du mappage des fichiers impossible.")
+            return
+        
+        if not self.processed_files_map:
+            print(f"Info [{self.name}] : Aucun fichier traité à enregistrer dans le JSON (`processed_files_map` est vide).")
+            return
+
+        # Chemin du fichier JSON de sortie
+        json_file_path = self.output_paths[0] / Path(self.name).with_suffix(".json")
+
+        print(f"Info [{self.name}]: Enregistrement du mappage des fichiers traités dans {json_file_path}...")
+        try:
+            with json_file_path.open("w", encoding="utf-8") as j:
+                # Utiliser l'encodeur personnalisé
+                json.dump(self.processed_files_map, j, indent=4, ensure_ascii=False, cls=PathJSONEncoder)
+            print(f"Info [{self.name}]: Mappage sauvegardé avec succès.")
+        except (IOError, TypeError) as e: # TypeError peut être levé par json.dump
+            print(f"Erreur critique [{self.name}]: Impossible d'enregistrer le fichier JSON des résultats: {e}")
+        except Exception as e_unexpected:
+            print(f"Erreur inattendue [{self.name}] lors de la sauvegarde JSON: {e_unexpected}")
             
 
 class ProcessingPipeline:
@@ -478,3 +554,21 @@ class ProcessingPipeline:
         for i, step in enumerate(steps_to_do, start=from_step_index):
             print(f"Running étape {i}: {step.name}")
             step.run()
+
+
+class PathJSONEncoder(json.JSONEncoder):
+    """
+    Encodeur JSON personnalisé pour sérialiser les objets pathlib.Path en chaînes.
+    Gère également les tuples (utilisés comme clés dans processed_files_map)
+    en les convertissant en listes pour une meilleure compatibilité JSON
+    si le dictionnaire est sérialisé directement (même si on opte pour une liste de dicts).
+    """
+    def default(self, o: Any) -> Any:
+        if isinstance(o, Path):
+            return str(o) # Convertit Path en string
+        if isinstance(o, tuple): # Si on sérialisait directement le dict, les clés tuples seraient des listes
+            # FIXME: normalement on ne devrait plus utiliser un tuple en clé, on va voir ça
+            return list(o)
+        # Laisser l'encodeur par défaut gérer les autres types
+        # ou lever une TypeError s'il ne sait pas
+        return super().default(o)
