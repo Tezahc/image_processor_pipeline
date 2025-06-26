@@ -1,12 +1,13 @@
 import json
+import random
 import concurrent
 import concurrent.futures
 from os import cpu_count
 from pathlib import Path
+from collections import Counter
 from typing import Any, Callable, List, Dict, Optional, Tuple, Iterator, Literal
 from warnings import warn
 from tqdm.notebook import tqdm
-import random
 
 MODES = ('one_input', 'zip', 'modulo', 'sample', 'custom')
 
@@ -22,6 +23,7 @@ class ProcessingStep:
                  fixed_input: bool = False,
                  root_dir: Optional[str | Path] = None,
                  sample_k: Optional[int] = None,
+                 save_log: bool = False,
                  workers: Optional[int] = 1,
                  options: Optional[Dict] = None):
         """
@@ -52,6 +54,7 @@ class ProcessingStep:
         self.root_dir = Path(root_dir) if root_dir else None 
         self.process_kwargs = options or {}
         self.sample_k = sample_k
+        self.save_log = save_log
 
         # Résolution des chemins
         self.input_paths: List[Path] = self._resolve_paths(input_dirs or [])
@@ -76,15 +79,15 @@ class ProcessingStep:
         self.pairing_function = pairing_function
 
         # Map pour suivre les sorties générées par entrée(s)
-        self.processed_files_map: List[Dict[str, Any]] = []
+        self.process_logs: List[Dict[str, Any]] = []
 
         # Gestion de la parallélisation
-        nb_cpus = cpu_count()
-        if workers > nb_cpus:
-            warn(f"Nombre de workers parallèles ajusté à {nb_cpus} (maximum système).")
+        max_cpus = cpu_count()
+        if workers > max_cpus:
+            warn(f"Nombre de workers parallèles ajusté à {max_cpus} (maximum système).")
         if workers == -1:
-            workers = nb_cpus
-        self.parallels_workers = min(workers, nb_cpus)
+            workers = max_cpus
+        self.parallels_workers = min(workers, max_cpus)
 
     def _resolve_paths(self, dir_list: str | Path | List[str | Path]) -> List[Path]:
         """Convertit et résout les chemins par rapport au root_dir. 
@@ -167,11 +170,12 @@ class ProcessingStep:
             raise FileNotFoundError(f"Aucun fichier trouvé dans les dossiers d'entrée {empty_folders} pour l'étape '{self.name}'.")
         
         # Prélève le nombre d'éléments prescrit. Aux même ids pour chaque liste d'input
-        if self.sample_k and isinstance(self.sample_k, int):
+        # BUG: normalement si sample_k=100 et que input_lists[1] (2e élément) = 80, on devrait avoir une IndexError car le sample avec id=95 n'existera pas dans input_lists[1]
+        if self.sample_k and isinstance(self.sample_k, int):  # askip vérifier les types n'est pas pythonique, on "trust" les inputs sinon ça raise une erreur anyway
             sample_ids = random.sample(range(len(input_file_lists[0])), self.sample_k)
             input_file_lists = [[file_list[i] for i in sample_ids] for file_list in input_file_lists]
         
-        # Mode de génération :
+        # Modes de génération :
         if self.pairing_method == 'one_input':
             if input_len == 0:  # Sécurité
                 raise ValueError("Mode 'one_input' mais aucun dossier d'entrée fourni.")
@@ -220,7 +224,6 @@ class ProcessingStep:
 
             yield from zip(input_files, do_blur, do_rgb)
 
-        
         elif self.pairing_method == 'custom':
             if not self.pairing_function:
                 raise ValueError("Fonction `pairing_function` manquante pour le mode 'custom'.")
@@ -233,10 +236,10 @@ class ProcessingStep:
 
     def run(self):
         """Exécute l'étape de traitement pour tous les éléments/paires d'entrée."""
-        self.processed_files_map = {}  # Retrace les résultats, y'a un truc à faire avec... un jour...
+        self.process_logs = {}  # Retrace les résultats, y'a un truc à faire avec... un jour...
         print(f"--- Exécution Étape : {self.name} ---")
         # print(self) # Utiliser __str__ pour afficher les détails si besoin 
-        # TODO : paramètre verbose
+        # TODO : paramètre verbose -> avec logging
 
         # 1. Créer les dossiers de sortie (une seule fois au début)
         print(f"Info [{self.name}]: Vérification/Création des dossiers de sortie...")
@@ -267,11 +270,13 @@ class ProcessingStep:
             return
 
         # Calcul du total pour tqdm
+        # TODO: en faire un attribut de classe self.total_items et le définir dans self._generate_processing_inputs
         total_items = None
         try:
             if self.pairing_method == 'one_input': total_items = len(input_file_lists[0])
             elif self.pairing_method == 'modulo': total_items = len(input_file_lists[0])
             elif self.pairing_method == 'zip': total_items = min(len(lst) for lst in input_file_lists if lst)
+            elif self.pairing_method == 'sample' : total_items = min()
             else: raise ValueError(f"mode d'appariemment inconnu, utiliser un parmi {MODES}")
         except Exception: total_items = None
 
@@ -280,18 +285,19 @@ class ProcessingStep:
         # --------------------------------------------------------------------------------------------
 
         processed_count, errors_count = self._processing_loop(argument_iterator, total_items)
-        # TODO: déduire success/error count à partir de self.processed_files_map (à rename btw)
-        # TODO: voir la pertinence de processed_files_map avec un vrai système de logging avec option d'output structuré (le json qu'on s'emmerde à build là)
+        # TODO: déduire success/error count à partir de self.process_logs (à rename btw)
+        # TODO: voir la pertinence de process_logs avec un vrai système de logging avec option d'output structuré (le json qu'on s'emmerde à build là)
+        process_counts = Counter(self.process_logs, "status") 
 
         # enregistrement des chemins de sauvegarde des fichiers
-        if self.processed_files_map:
-            self._save_processed_map_to_json()
+        if self.process_logs and self.save_log:
+            self._save_process_logs_to_json()
         else:
             print(f"Info [{self.name}] : Aucun log de traitement généré.")
         
         # TODO: intégrer le timings (quoique, avec tqdm.... :pray:)
         print(f"--- Étape {self.name} terminée ---") 
-        print(f"  {len(processed_count)} éléments traités avec succès (fichiers de sortie générés).")
+        print(f"  {processed_count} éléments traités avec succès (fichiers de sortie générés).")
         if errors_count > 0:
             print(f"  {errors_count} erreur(s) ou traitement(s) sans retour.")
 
@@ -299,7 +305,7 @@ class ProcessingStep:
                          argument_iterator: Iterator[Tuple[Path, ...]], 
                          total_items: int) -> Tuple[int, int]:
         """Exécute la boucle de traitement principale, soit en séquentiel, soit en parallèle.
-        Met à jour self.processed_files_map et retourne les compteurs.
+        Met à jour self.process_logs et retourne les compteurs.
         """
         success_count = 0
         error_count = 0
@@ -329,14 +335,14 @@ class ProcessingStep:
                         **self.process_kwargs           # Passage des options en kwargs
                     )
                     # Met à jour le log
-                    success = self._build_log(log_entry, saved_output_paths, input_args_tuple)
+                    success = self._build_log(log_entry, saved_output_paths)
                     if success:
                         success_count += 1
                     else: 
                         error_count += 1
                 
                 except Exception as e_proc:
-                    # Erreur innatendue dans process_function ou lors de l'appel
+                    # Erreur inattendue dans process_function ou lors de l'appel
                     tqdm.write(f"\nErreur [{self.name}]: Échec traitement de {input_args_tuple}: {e_proc}")
                     log_entry.update({
                         "status" : "Error",
@@ -345,7 +351,7 @@ class ProcessingStep:
                     error_count += 1
 
                 # Ajout de l'entrée de log
-                self.processed_files_map.append(log_entry)
+                self.process_logs.append(log_entry)
 
             return success_count, error_count
         
@@ -359,6 +365,7 @@ class ProcessingStep:
                 raise RuntimeError(f"Aucun argument à traiter après génération. Fin.")
             
             # Mettre à jour total_item si l'itérateur a été consomé
+            # NOTE: quand on passera total_items en attribut de classe, (à priori) virer cette partie qui deviendra useless ?
             if total_items is None:
                 total_items = len(list_of_input_args)
             
@@ -391,7 +398,7 @@ class ProcessingStep:
                             "status" : "Submission Error",
                             "error_message" : str(e_submit)
                         })
-                        self.processed_files_map.append(log_entry)
+                        self.process_logs.append(log_entry)
                         error_count += 1
                 
                 for future in tqdm(concurrent.futures.as_completed(future_to_log.keys()),
@@ -404,8 +411,8 @@ class ProcessingStep:
                     log_entry = future_to_log[future] 
 
                     try:
-                        saved_output_paths: Optional[Path | List[Path]] = future.result() # Bloque jusqu'à résultat
-                        success = self._build_log(log_entry, saved_output_paths, log_entry["inputs"])
+                        saved_output_paths: Optional[Path | List[Path]] = future.result()  # Bloque jusqu'à résultat
+                        success = self._build_log(log_entry, saved_output_paths)
                         if success:
                             success_count += 1
                         else:
@@ -421,17 +428,17 @@ class ProcessingStep:
                         # import traceback; tqdm.write(traceback.format_exc()) # Pour debug
                         errors_count += 1
 
-                    self.processed_files_map.append(log_entry)
+                    self.process_logs.append(log_entry)
             
             return success_count, error_count
         
+        # NeverTM
         else:
-            raise ValueError(f"")
+            raise ValueError(f"Logique non prévue, veuillez revoir le nombre de workers attribués à la tâche.")
 
     def _build_log(self,
                    log_entry: Dict[str, Any],
-                   saved_output_paths: Optional[Path | List[Path]],
-                   input_id: Any
+                   saved_output_paths: Optional[Path | List[Path]]
                    ) -> bool:
         """Met à jour un log_entry avec le résultat de `process_function`. Modifie le log entry directement."""
         if saved_output_paths:
@@ -462,30 +469,30 @@ class ProcessingStep:
             log_entry["status"] = "no_output"
             return False
 
-
-    def _save_processed_map_to_json(self) -> None:
+    def _save_process_logs_to_json(self) -> None:
         """Sauvegarde la liste des logs de traitement dans un fichier JSON,
         en utilisant un encodeur personnalisé pour les objets Path.
         Le fichier JSON est placé dans le premier dossier de sortie et porte le nom de l'étape.
         """
         if not self.output_paths:
+            # NOTE: useless ? déjà vérifié dans l'init de la classe non ?
             warn(f"Avertissement [{self.name}] : Aucun dossier de sortie configuré."
                  "Enregistrement du mappage des fichiers impossible.")
             return
         
-        if not self.processed_files_map:
-            print(f"Info [{self.name}] : Aucun fichier traité à enregistrer dans le JSON (`processed_files_map` est vide).")
+        if not self.process_logs:
+            print(f"Info [{self.name}] : Aucun fichier traité à enregistrer dans le JSON (`process_logs` est vide).")
             return
 
         # Chemin du fichier JSON de sortie
-        json_file_path = self.output_paths[0] / Path(self.name).with_suffix(".json")
+        json_file_path = self.output_paths[0].parent / Path(self.name).with_suffix(".json")
 
-        print(f"Info [{self.name}]: Enregistrement du mappage des fichiers traités dans {json_file_path}...")
+        print(f"Info [{self.name}]: Enregistrement des logs de fichiers traités dans {json_file_path}...")
         try:
             with json_file_path.open("w", encoding="utf-8") as j:
                 # Utiliser l'encodeur personnalisé
-                json.dump(self.processed_files_map, j, indent=4, ensure_ascii=False, cls=PathJSONEncoder)
-            print(f"Info [{self.name}]: Mappage sauvegardé avec succès.")
+                json.dump(self.process_logs, j, indent=4, ensure_ascii=False, cls=PathJSONEncoder)
+            print(f"Info [{self.name}]: Logs sauvegardé avec succès.")
         except (IOError, TypeError) as e: # TypeError peut être levé par json.dump
             print(f"Erreur critique [{self.name}]: Impossible d'enregistrer le fichier JSON des résultats: {e}")
         except Exception as e_unexpected:
@@ -511,7 +518,7 @@ class ProcessingPipeline:
             step.input_paths = step._resolve_paths(step.input_paths)
             step.output_paths = step._resolve_paths(step.output_paths)
 
-        # Si pas précisé, on assert position à la dernière étape (volontairement = len(steps) donc out of index)
+        # Si non précisé, on assert `position` à la dernière étape (volontairement = len(steps) donc out of index)
         position = len(self.steps) if position is None else position
         
         # Si l'étape ajoutée n'a pas d'input, on a forcément au moins une étape dans le pipeline,
@@ -562,7 +569,7 @@ class ProcessingPipeline:
 class PathJSONEncoder(json.JSONEncoder):
     """
     Encodeur JSON personnalisé pour sérialiser les objets pathlib.Path en chaînes.
-    Gère également les tuples (utilisés comme clés dans processed_files_map)
+    Gère également les tuples (utilisés comme clés dans process_logs)
     en les convertissant en listes pour une meilleure compatibilité JSON
     si le dictionnaire est sérialisé directement (même si on opte pour une liste de dicts).
     """
