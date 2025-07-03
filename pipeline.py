@@ -236,7 +236,7 @@ class ProcessingStep:
 
     def run(self):
         """Exécute l'étape de traitement pour tous les éléments/paires d'entrée."""
-        self.process_logs = {}  # Retrace les résultats, y'a un truc à faire avec... un jour...
+        self.process_logs = []  # Retrace les résultats, y'a un truc à faire avec... un jour...
         print(f"--- Exécution Étape : {self.name} ---")
         # print(self) # Utiliser __str__ pour afficher les détails si besoin 
         # TODO : paramètre verbose -> avec logging
@@ -287,7 +287,7 @@ class ProcessingStep:
         processed_count, errors_count = self._processing_loop(argument_iterator, total_items)
         # TODO: déduire success/error count à partir de self.process_logs (à rename btw)
         # TODO: voir la pertinence de process_logs avec un vrai système de logging avec option d'output structuré (le json qu'on s'emmerde à build là)
-        process_counts = Counter(self.process_logs, "status") 
+        process_counts = Counter(log.get("status") for log in self.process_logs) 
 
         # enregistrement des chemins de sauvegarde des fichiers
         if self.process_logs and self.save_log:
