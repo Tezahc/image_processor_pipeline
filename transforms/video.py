@@ -32,7 +32,7 @@ def frame_extraction(
         raise ValueError(f"Fichier vidéo {video_path.suffix} non pris en charge." \
                          f"Format autorisés : {VID_FORMATS}")
     
-    frame_count = 0
+    frame_count = 1
     success = True
     # Boucle sur chaque image de la vidéo
     while success:
