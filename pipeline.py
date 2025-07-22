@@ -426,7 +426,7 @@ class ProcessingStep:
                             "error_message" : error_msg
                         })
                         # import traceback; tqdm.write(traceback.format_exc()) # Pour debug
-                        errors_count += 1
+                        error_count += 1
 
                     self.process_logs.append(log_entry)
             
