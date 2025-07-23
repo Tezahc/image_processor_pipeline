@@ -13,6 +13,179 @@ MODES = ('one_input', 'zip', 'modulo', 'sample', 'custom')
 
 
 class ProcessingStep:
+    """Représente une étape de traitement unique et configurable dans un pipeline.
+
+    Cette classe encapsule la logique d'une seule étape de traitement de données.
+    Elle gère la localisation des fichiers d'entrée, l'appariement des fichiers
+    selon une méthode choisie, l'exécution d'une fonction de traitement
+    (potentiellement en parallèle), et la journalisation des résultats.
+
+    Attributes
+    ----------
+    name : str
+        Nom lisible de l'étape.
+    process_function : Callable
+        La fonction qui effectue le traitement.
+    input_paths : List[Path]
+        Liste des chemins absolus vers les dossiers d'entrée.
+    output_paths : List[Path]
+        Liste des chemins absolus vers les dossiers de sortie.
+    root_dir : Optional[Path]
+        Dossier racine pour résoudre les chemins relatifs.
+    sample_k : Optional[int]
+        Nombre d'éléments à échantillonner aléatoirement depuis les entrées.
+    save_log : bool
+        Si True, sauvegarde un journal JSON des opérations à la fin de l'exécution.
+    fixed_input : bool
+        Indicateur pour un futur usage (non implémenté).
+    pairing_method : str
+        La méthode utilisée pour apparier les fichiers d'entrée.
+    pairing_function : Optional[Callable]
+        La fonction personnalisée pour l'appariement si `pairing_method` est 'custom'.
+    process_logs : List[Dict[str, Any]]
+        Journal des opérations, chaque dictionnaire représentant un appel de traitement.
+    parallels_workers : int
+        Nombre de processus parallèles à utiliser pour l'exécution.
+    process_kwargs : dict
+        Arguments (mots-clés) additionnels passés à `process_function`.
+
+    Methods
+    -------
+    run()
+        Lance l'exécution complète de l'étape de traitement.
+
+    Parameters
+    ----------
+    name : str
+        Nom lisible de l'étape.
+    process_function : Callable
+        La fonction qui effectue le traitement. Sa signature doit être :
+        `(*input_paths: Path, output_dirs: List[Path], **options) -> Optional[Path | List[Path]]`
+        Elle doit retourner le ou les chemins des fichiers sauvegardés, ou None si l'opération a échoué.
+    input_dirs : Optional[str | Path | List[str | Path]], default=None
+        Chemin(s) vers le(s) dossier(s) contenant les fichiers d'entrée.
+    output_dirs : Optional[str | Path | List[str | Path]], default=None
+        Chemin(s) vers le(s) dossier(s) où les résultats seront sauvegardés.
+        Au moins un dossier de sortie doit être spécifié.
+    pairing_method : {'one_input', 'zip', 'modulo', 'sample', 'custom'}, default='one_input'
+        Méthode pour combiner les fichiers des `input_dirs`:
+        - 'one_input': Traite chaque fichier du premier `input_dirs` individuellement.
+        - 'zip': Apparie les fichiers des `input_dirs` un par un (ex: file1_A avec file1_B). S'interrompt dès que la plus petite liste est terminée.
+        - 'modulo': Apparie chaque fichier du premier dossier avec un fichier (randomisé) du second,
+        en revenant au début du second si nécessaire (utile pour les fonds, par exemple).
+        - 'sample': Logique d'échantillonnage personnalisée (à adapter).
+        - 'custom': Utilise la `pairing_function` fournie pour générer les paires.
+    pairing_function : Optional[Callable[[List[List[Path]]], Iterator[Tuple]]], default=None
+        Requis si `pairing_method` est 'custom'. Prend une liste de listes de fichiers
+        et doit retourner un itérateur de tuples d'arguments.
+    fixed_input : bool, default=False
+        Indique si les entrées de cette étape doivent rester fixes même
+        lors de l'insertion dans un pipeline.
+        TODO 2 : prendre en charge le fixed_input avec les listes de dossiers -> liste de bool ? oO
+    root_dir : Optional[str | Path], default=None
+        Dossier racine pour résoudre les chemins d'entrée/sortie relatifs. Si non fourni,
+        les chemins relatifs sont résolus par rapport au répertoire de travail courant.
+    sample_k : Optional[int], default=None
+        Si spécifié, traite seulement un échantillon aléatoire de `k` éléments.
+    save_log : bool, default=False
+        Si True, un fichier JSON consignant chaque opération (entrée, sortie, statut)
+        est sauvegardé dans le premier dossier de sortie.
+    workers : int, default=1
+        Nombre de processus parallèles pour exécuter `process_function`.
+        - 1 (défaut): Exécution séquentielle.
+        - -1: Utilise tous les cœurs CPU disponibles.
+        - > 1: Utilise le nombre de workers spécifié.
+    options : Optional[Dict], default=None
+        Un dictionnaire d'arguments (mots-clés) additionnels qui seront passés
+        directement à `process_function`.
+
+    Examples
+    --------
+    **Exemple 1 : Étape simple avec un seul dossier d'entrée**
+
+    >>> import tempfile
+    >>> from pathlib import Path
+
+    >>> # 1. Définir une fonction de traitement simple
+    >>> def copy_and_rename(input_path, output_dirs, **options):
+    ...     # Construit le chemin de sortie dans le premier dossier de sortie
+    ...     output_path = output_dirs[0] / f"processed_{input_path.name}"
+    ...     with open(input_path, 'r') as f_in, open(output_path, 'w') as f_out:
+    ...         f_out.write(f_in.read())
+    ...     return output_path # Retourne le chemin du fichier créé
+
+    >>> # 2. Créer des dossiers et fichiers temporaires
+    >>> with tempfile.TemporaryDirectory() as tmpdir:
+    ...     temp_path = Path(tmpdir)
+    ...     input_dir = temp_path / "input"
+    ...     output_dir = temp_path / "output"
+    ...     input_dir.mkdir()
+    ...     output_dir.mkdir()
+    ...     (input_dir / "file1.txt").write_text("hello")
+    ...     (input_dir / "file2.txt").write_text("world")
+    ...
+    ...     # 3. Initialiser et exécuter l'étape
+    ...     step = ProcessingStep(
+    ...         name="copy_files",
+    ...         process_function=copy_and_rename,
+    ...         input_dirs=[input_dir],
+    ...         output_dirs=[output_dir],
+    ...         pairing_method='one_input'
+    ...     )
+    ...     step.run()
+    ...
+    ...     # 4. Vérifier les résultats
+    ...     assert (output_dir / "processed_file1.txt").exists()
+    ...     assert (output_dir / "processed_file2.txt").exists()
+    ...     print(sorted([p.name for p in output_dir.iterdir()]))
+    ['processed_file1.txt', 'processed_file2.txt']
+
+
+    **Exemple 2 : Étape appariant des fichiers de deux dossiers (mode 'zip')**
+
+    >>> # 1. Définir une fonction qui combine deux fichiers
+    >>> def combine_files(text_path, data_path, output_dirs, **options):
+    ...     output_path = output_dirs[0] / f"combined_{text_path.stem}.txt"
+    ...     text = text_path.read_text()
+    ...     data = data_path.read_text()
+    ...     output_path.write_text(f"{text} - {data}")
+    ...     return output_path
+
+    >>> # 2. Créer la structure de fichiers
+    >>> with tempfile.TemporaryDirectory() as tmpdir:
+    ...     temp_path = Path(tmpdir)
+    ...     texts_dir = temp_path / "texts"
+    ...     data_dir = temp_path / "data"
+    ...     output_dir = temp_path / "output_combined"
+    ...     texts_dir.mkdir()
+    ...     data_dir.mkdir()
+    ...     output_dir.mkdir()
+    ...     (texts_dir / "a.txt").write_text("A")
+    ...     (texts_dir / "b.txt").write_text("B")
+    ...     (data_dir / "1.dat").write_text("one")
+    ...     (data_dir / "2.dat").write_text("two")
+    ...
+    ...     # 3. Initialiser et exécuter l'étape en mode 'zip'
+    ...     step_zip = ProcessingStep(
+    ...         name="combine_step",
+    ...         process_function=combine_files,
+    ...         input_dirs=[texts_dir, data_dir],
+    ...         output_dirs=[output_dir],
+    ...         pairing_method='zip',
+    ...         workers=2 # Exemple avec parallélisme
+    ...     )
+    ...     step_zip.run()
+    ...
+    ...     # 4. Vérifier le résultat
+    ...     result_file = output_dir / "combined_a.txt"
+    ...     assert result_file.exists()
+    ...     print(result_file.read_text())
+    ...     print(sorted([p.name for p in output_dir.iterdir()]))
+    A - one
+    ['combined_a.txt', 'combined_b.txt']
+    """
+
+
     def __init__(self,
                  name: str,
                  process_function: Callable,
@@ -26,27 +199,7 @@ class ProcessingStep:
                  save_log: bool = False,
                  workers: Optional[int] = 1,
                  options: Optional[Dict] = None):
-        """
-        TODO: rewrite et uniformiser les styles de docstring (numpy ou Google)
-        Initialise une étape de traitement générique.
 
-        Args:
-            name (str): Nom lisible de l'étape.
-            process_function (Callable): La fonction qui effectue le traitement.
-                Signature attendue : (*input_paths: Path, output_paths: List[Path], **options) -> Optional[Path | List[Path]]
-                Doit accepter un nombre variable d'arguments Path en entrée (selon le mode),
-                la liste des chemins de sortie, et les options.
-                Doit retourner le(s) chemin(s) du/des fichier(s) sauvegardé(s), ou None si échec/rien à sauver.
-            input_dirs (List): Liste des chemins des dossiers d'entrée (relatifs ou absolus).
-            output_dirs (List): Liste des chemins des dossiers de sortie (relatifs ou absolus).
-            pairing_method (PairingMethod): Comment combiner les fichiers des input_dirs.
-                Options: 'one_input' (défaut), 'zip', 'modulo', 'sample', 'custom'.
-            pairing_function (Callable): Requis si method='custom'. Voir doc _generate_processing_args.
-            fixed_input (Bool): TODO: ajouter description déjà écrite ailleurs...
-                                TODO 2 : prendre en charge le fixed_input avec les listes de dossiers -> liste de bool ? oO
-            root_dir (Optional): Dossier racine pour résoudre les chemins relatifs.
-            options (Optional[Dict]): Arguments (kwargs) additionnels passés à process_function.
-        """
         # TODO: accepter le nom d'une étape lors des manipulations (insertions, ...)
         self.name = name 
         self.process_function = process_function
@@ -500,6 +653,95 @@ class ProcessingStep:
             
 
 class ProcessingPipeline:
+    """Orchestre une séquence d'étapes de traitement (`ProcessingStep`).
+
+    Cette classe permet de chaîner plusieurs `ProcessingStep` pour créer un
+    pipeline de traitement de données complet. Elle gère la transmission
+    des dossiers de sortie d'une étape comme dossiers d'entrée pour la
+    suivante, simplifiant ainsi la configuration de flux de travail complexes.
+
+    Attributes
+    ----------
+    steps : List[ProcessingStep]
+        La liste ordonnée des étapes de traitement qui composent le pipeline.
+    root_dir : Optional[Path]
+        Le dossier racine global pour le pipeline, utilisé pour résoudre les
+        chemins relatifs des étapes qui n'ont pas leur propre `root_dir`.
+
+    Methods
+    -------
+    add_step(step, position=None)
+        Ajoute une `ProcessingStep` au pipeline à une position donnée.
+    run(from_step_index=0, only_one=False)
+        Exécute le pipeline à partir d'une étape spécifiée.
+
+    Parameters
+    ----------
+    root_dir : Optional[str | Path], default=None
+        Chemin vers le dossier racine du projet. S'il est fourni, il sera
+        utilisé par défaut pour toutes les étapes ajoutées au pipeline.
+
+    Examples
+    --------
+    >>> import tempfile
+    >>> from pathlib import Path
+
+    >>> # 1. Définir deux fonctions de traitement
+    >>> def step1_normalize(in_path, output_dirs, **options):
+    ...     out_path = output_dirs[0] / f"norm_{in_path.name}"
+    ...     out_path.write_text(in_path.read_text().upper())
+    ...     return out_path
+    ...
+    >>> def step2_add_header(in_path, output_dirs, **options):
+    ...     out_path = output_dirs[0] / f"final_{in_path.name}"
+    ...     header = options.get("header", "DEFAULT HEADER")
+    ...     out_path.write_text(f"{header}\\n---\\n{in_path.read_text()}")
+    ...     return out_path
+
+    >>> # 2. Mettre en place la structure de dossiers
+    >>> with tempfile.TemporaryDirectory() as tmpdir:
+    ...     temp_path = Path(tmpdir)
+    ...     # On utilise un root_dir pour simplifier les chemins
+    ...     (temp_path / "input_data").mkdir()
+    ...     (temp_path / "input_data" / "doc1.txt").write_text("some text")
+    ...     (temp_path / "processed_data").mkdir()
+    ...     (temp_path / "final_data").mkdir()
+    ...
+    ...     # 3. Créer les étapes
+    ...     # Étape 1 : a des `input_dirs` et `output_dirs` explicites
+    ...     normalize_step = ProcessingStep(
+    ...         name="Normalisation",
+    ...         process_function=step1_normalize,
+    ...         input_dirs=["input_data"],
+    ...         output_dirs=["processed_data"]
+    ...     )
+    ...
+    ...     # Étape 2 : n'a pas d'`input_dirs`. Le pipeline les déduira.
+    ...     header_step = ProcessingStep(
+    ...         name="Ajout Entete",
+    ...         process_function=step2_add_header,
+    ...         output_dirs=["final_data"],
+    ...         options={"header": "PIPELINE REPORT"}
+    ...     )
+    ...
+    ...     # 4. Créer et configurer le pipeline
+    ...     pipeline = ProcessingPipeline(root_dir=temp_path)
+    ...     pipeline.add_step(normalize_step)
+    ...     pipeline.add_step(header_step) # L'input sera "processed_data"
+    ...
+    ...     # 5. Exécuter le pipeline complet
+    ...     pipeline.run()
+    ...
+    ...     # 6. Vérifier le résultat final
+    ...     final_file = temp_path / "final_data" / "final_norm_doc1.txt"
+    ...     assert final_file.exists()
+    ...     print(final_file.read_text())
+    PIPELINE REPORT
+    ---
+    SOME TEXT
+    """
+
+    
     def __init__(self, root_dir: Optional[str | Path] = None):
         self.steps: List[ProcessingStep] = []
         # définit le dossier source du pipeline → obligatoire ?
