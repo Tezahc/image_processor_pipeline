@@ -477,7 +477,7 @@ class ProcessingStep:
                     "outputs": None,
                     "status": "Pending",
                     "error_message": None, 
-                    # "options_used": self.process_kwargs.copy()
+                    "options_used": self.process_kwargs.copy() or None
                 }
 
                 try:
@@ -535,7 +535,7 @@ class ProcessingStep:
                         "outputs" : None, 
                         "status" : "Pending Execution",
                         "error_message" : None,
-                        # "options_used" : self.process_kwargs.copy()
+                        "options_used" : self.process_kwargs.copy() or None
                     }
                     try:
                         future = executor.submit(
