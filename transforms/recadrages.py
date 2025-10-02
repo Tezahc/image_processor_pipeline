@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 import cv2
 from PIL import Image
-from crop_square import _read_bboxes
+from .crop_square import _read_bboxes
 from ultralytics.utils.ops import xywhn2xyxy
 import numpy as np
 
@@ -90,29 +90,51 @@ def fit_crop(
 
 def crop_bbox(
     image_path: Path,
-    label_path: Path,
     output_dirs: List[Path],
-    size: float,
+    size: float = 0.5,
     **options: Any,
 ) -> Optional[List[Path]]:
+    """rogne une image en plusieurs, autour des détections yolo de celle-ci.
+
+    Parameters
+    ----------
+    image_path : Path
+        chemin de l'image d'entrée.
+    output_dirs : List[Path]
+        chemin d'enregistrement des images.
+    size : float
+        rapport apparent entre la taille de la box de détection et la taille de l'image rognée.
+
+    Returns
+    -------
+    Optional[List[Path]]
+        chemins des images crées
+    """
     # ouverture de l'image
     output_dirs = output_dirs[0]
     img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
     height, width = img.shape[:2]
 
     # lecture des détections
+    label_path = image_path.parent / "labels" / image_path.with_suffix(".txt").name
     if not label_path.exists():
-        print(f"aucune fichier de label trouvé pour cette image.")
+        print(f"aucun fichier de label trouvé pour l'image {image_path.name}.")
         return
     classes, bboxes = _read_bboxes(label_path)
+    
+    # agrandir la zone de crop pour que la bbox soit `size`% de la zone
+    # on agrandit les width et height des bbox (xywh)
     bboxes[:, 2:4] = bboxes[:, 2:4] / size
+    # convertit en valeurs absolues mêmes si elles sont incohérentes (<0 ou >shape)
     bboxes_abs = xywhn2xyxy(bboxes, width, height)
+    # "clip" aux dimensions de l'image
     bboxes_abs[:, [0,2]] = np.clip(bboxes_abs[:, [0,2]], 0, width)
     bboxes_abs[:, [1,3]] = np.clip(bboxes_abs[:, [1,3]], 0, height)
 
+    # enregistre une image par détection
     for i, (cls, bbox) in enumerate(zip(classes, bboxes_abs)):
-        crop_top, crop_left, crop_bottom, crop_right = bbox
+        crop_left, crop_top, crop_right, crop_bottom = map(int, bbox)
         detection = img[crop_top:crop_bottom, crop_left:crop_right]
 
-        save_path = output_dirs / image_path.with_stem(f"{image_path.stem}_{i}-class_{cls:02}").name
+        save_path = output_dirs / image_path.with_stem(f"{cls:02}-{image_path.stem}-id{i}").name
         cv2.imwrite(str(save_path), detection)
