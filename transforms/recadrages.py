@@ -1,10 +1,17 @@
+import math
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 import cv2
 from PIL import Image
+from crop_square import _read_bboxes
+from ultralytics.utils.ops import xywhn2xyxy
+import numpy as np
 
 
 def _compute_crop(value, total_length):
+    """vérifie que la marche de rognage a une valeur positive et renvoie une marge en pixels.
+    Accepte un float pour rogner un % de l'image"""
+    #TODO: vérifier la présence de total_length uniquement si value est un float entre 0 et 1. Sinon None par défaut
     if value < 0:
         raise ValueError("Les valeurs de rognage ne peuvent pas être négatives.")
     return int(total_length * value) if 0 <= value < 1 else int(value)
@@ -80,3 +87,32 @@ def fit_crop(
     new_image.save(output_path)
 
     return output_path
+
+def crop_bbox(
+    image_path: Path,
+    label_path: Path,
+    output_dirs: List[Path],
+    size: float,
+    **options: Any,
+) -> Optional[List[Path]]:
+    # ouverture de l'image
+    output_dirs = output_dirs[0]
+    img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+    height, width = img.shape[:2]
+
+    # lecture des détections
+    if not label_path.exists():
+        print(f"aucune fichier de label trouvé pour cette image.")
+        return
+    classes, bboxes = _read_bboxes(label_path)
+    bboxes[:, 2:4] = bboxes[:, 2:4] / size
+    bboxes_abs = xywhn2xyxy(bboxes, width, height)
+    bboxes_abs[:, [0,2]] = np.clip(bboxes_abs[:, [0,2]], 0, width)
+    bboxes_abs[:, [1,3]] = np.clip(bboxes_abs[:, [1,3]], 0, height)
+
+    for i, (cls, bbox) in enumerate(zip(classes, bboxes_abs)):
+        crop_top, crop_left, crop_bottom, crop_right = bbox
+        detection = img[crop_top:crop_bottom, crop_left:crop_right]
+
+        save_path = output_dirs / image_path.with_stem(f"{image_path.stem}_{i}-class_{cls:02}").name
+        cv2.imwrite(str(save_path), detection)
