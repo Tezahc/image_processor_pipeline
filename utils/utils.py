@@ -58,6 +58,9 @@ def _validate_dirs(output_dirs: List[Path], nb_dirs: int) -> Path | Tuple[Path, 
     """
     if len(output_dirs) < nb_dirs:
         raise IndexError(f"Au moins {nb_dirs} dossiers de sortie requis (images, labels). {len(output_dirs)} fournis.")
+    elif len(output_dirs) > nb_dirs:
+        #TODO: warn
+        print(f"WARNING : plus de dossiers de sorties que nécessaires. Seul les {nb_dirs} seront utilisés")
     
     paths = tuple(Path(dir_) for dir_ in output_dirs)
     if nb_dirs == 1:
