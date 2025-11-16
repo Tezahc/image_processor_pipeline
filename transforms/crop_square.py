@@ -29,7 +29,7 @@ def _load_image(filepath: Path) -> np.ndarray:
     IOError
         Si OpenCV n'arrive pas à lire l'image.
     """
-    if not filepath.isfile():
+    if not filepath.is_file():
         raise FileNotFoundError(f"Image non trouvée: {filepath}")
     img = cv2.imread(str(filepath))
     if img is None:
@@ -151,7 +151,7 @@ def process_square_crop_around_bbox(
     [Path('out/imgs/crop_img.jpg'), Path('out/labels/crop_img.txt')]
     """
     # --- 1. Validation des chemins ---
-    image_target_dir, label_target_dir = utils._validate_dirs(output_dirs)
+    image_target_dir, label_target_dir = utils._validate_dirs(output_dirs, 2)
 
     if input_image_path.stem != input_label_path.stem:
         warn(f"Warning [Crop Carré]: image ({input_image_path.name}) et label ({input_label_path.name}) "
@@ -162,7 +162,7 @@ def process_square_crop_around_bbox(
     class_ids, bboxes = _read_bboxes(input_label_path)
     height, width = image.shape[:2]
 
-    # --- 3. Conversion bbox noramlisées -> absolues ---
+    # --- 3. Conversion bbox normalisées -> absolues ---
     # (cx, cy, w, h) -> (x_min, y_min, x_max, y_max)
     bboxes_absolute = xywhn2xyxy(bboxes, width, height)
 
@@ -207,7 +207,10 @@ def process_square_crop_around_bbox(
     clipped[:, 2] = np.clip(shifted[:, 2], 0, crop_size)  # all x2
     clipped[:, 3] = np.clip(shifted[:, 3], 0, crop_size)  # all y2
 
-    valid = (clipped[:, 0] < clipped[:, 2]) and (clipped[:, 1] < clipped[:, 3])
+    valid = np.logical_and(
+        (clipped[:, 0] < clipped[:, 2]),
+        (clipped[:, 1] < clipped[:, 3])
+    )
     if not any(valid):
         raise RuntimeError(f"Aucune bbox résiduelle après le crop.")
     
