@@ -1,9 +1,10 @@
 import random
-import shutil
+import cv2
+import numpy as np
 from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter
 from typing import Any, List, Optional
-from image_processor_pipeline.utils.utils import _validate_dirs
+from image_processor_pipeline.utils.utils import _validate_dirs, _load_image
 
 
 def enhance_image(
@@ -53,3 +54,47 @@ def enhance_image(
         img.save(output_path)
     
     return output_path
+
+def gray_world_transform(img:np.ndarray) -> np.ndarray:
+    """Applique une balance des blanc selon la méthode "gray world" sur une image cv2.
+
+    Parameters
+    ----------
+    img : np.ndarray
+        Image sous forme de matrice. 3 canaux attendus au format BGR.
+
+    Returns
+    -------
+    np.ndarray
+        Image balancée, au format BGR.
+    """
+    img_cp = img.copy()
+    b_avg, g_avg, r_avg = img_cp.mean(axis=(0,1))
+    img_avg = img_cp.mean()
+
+    img_cp[:,:,0] = np.clip(img_cp[:,:,0] * (img_avg / b_avg), 0, 255)
+    img_cp[:,:,1] = np.clip(img_cp[:,:,1] * (img_avg / g_avg), 0, 255)
+    img_cp[:,:,2] = np.clip(img_cp[:,:,2] * (img_avg / r_avg), 0, 255)
+    return img_cp
+
+def preprocess(input_image:Path,
+               output_dirs:List[Path],
+               **kwargs):
+    image_target_dir = _validate_dirs(output_dirs, 1)
+    img = _load_image(input_image)
+
+    balanced_image = gray_world_transform(img)
+    
+    output_path = image_target_dir / input_image.name
+
+    try:
+        sucess = cv2.imwrite(str(output_path), balanced_image)
+        if sucess:
+            return output_path
+        else:
+            print(f"Avertissement [{input_image.name} - Gray World]: Échec de sauvegarde (imwrite a retourné False) pour {output_path.name}")
+            return None
+    except Exception as e_save:
+        print(f"Erreur [{input_image.name} - Gray World]: Échec de sauvegarde pour {output_path.name}: {e_save}")
+        return None
+    

@@ -99,3 +99,30 @@ def _save_crop_files(
         for cls_id, box in zip(classes, bboxes):
             cx, cy, w, h = box
             f.write(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+
+def _load_image(filepath: Path) -> np.ndarray:
+    """Charge une image avec OpenCV.
+
+    Parameters
+    ----------
+    filepath : Path
+        Chemin vers l'image.
+
+    Returns
+    -------
+    np.ndarray
+        Image BGR.
+    
+    Raises
+    ------
+    FileNotFoundError
+        Si le fichier n'existe pas.
+    IOError
+        Si OpenCV n'arrive pas à lire l'image.
+    """
+    if not filepath.is_file():
+        raise FileNotFoundError(f"Image non trouvée: {filepath}")
+    img = cv2.imread(str(filepath))
+    if img is None:
+        raise IOError(f"Impossible de charger l'image {filepath.name} via OpenCV.")
+    return img

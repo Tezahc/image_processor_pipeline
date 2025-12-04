@@ -9,33 +9,6 @@ from ultralytics.utils.ops import xywhn2xyxy, xyxy2xywhn
 from icecream import ic
 
 
-def _load_image(filepath: Path) -> np.ndarray:
-    """Charge une image avec OpenCV.
-
-    Parameters
-    ----------
-    filepath : Path
-        Chemin vers l'image.
-
-    Returns
-    -------
-    np.ndarray
-        Image BGR.
-    
-    Raises
-    ------
-    FileNotFoundError
-        Si le fichier n'existe pas.
-    IOError
-        Si OpenCV n'arrive pas à lire l'image.
-    """
-    if not filepath.is_file():
-        raise FileNotFoundError(f"Image non trouvée: {filepath}")
-    img = cv2.imread(str(filepath))
-    if img is None:
-        raise IOError(f"Impossible de charger l'image {filepath.name} via OpenCV.")
-    return img
-
 def _read_bboxes(filepath: Path) -> Tuple[np.ndarray, np.ndarray]:
     """Lit un fichier de labels YOLO (.txt) et renvoie les classes et bboxes.
 
@@ -158,7 +131,7 @@ def process_square_crop_around_bbox(
              "n'ont pas le même nom. Fichier ignoré et poursuite du traitement...")
     
     # --- 2. Chargement Image et Label ---
-    image = _load_image(input_image_path)
+    image = utils._load_image(input_image_path)
     class_ids, bboxes = _read_bboxes(input_label_path)
     height, width = image.shape[:2]
 
