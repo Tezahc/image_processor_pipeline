@@ -2,6 +2,7 @@ import cv2
 import random
 from pathlib import Path
 from typing import Any, List, Literal, Optional
+import numpy as np
 from ultralytics.data.utils import IMG_FORMATS
 from warnings import warn
 
@@ -147,3 +148,61 @@ def generate_symmetries(
             # On continue d'essayer de sauvegarder les autres images
     
     return saved_files
+
+
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class FlipParams:
+    horizontal: bool = False,
+    vertical: bool = False
+
+def generate_flips(
+    allow_horizontal=True,
+    allow_vertical=True,
+    include_identity=True,
+    randomize=True
+):
+    flips=[]
+    if include_identity:
+        flips.append(FlipParams())
+    if allow_horizontal:
+        flips.append(FlipParams(horizontal=True))
+    if allow_vertical:
+        flips.append(FlipParams(vertical=True))
+    if allow_horizontal and allow_vertical:
+        flips.append(FlipParams(True, True))
+    if randomize:
+        random.shuffle(flips)
+    return flips
+
+def apply_flip_image(img, flip: FlipParams):
+    if flip.horizontal:
+        img = np.flip(img, axis=0)
+
+def apply_flip_labels(bboxs :List[float], flip: FlipParams):
+    bboxs = bboxs.copy()
+    if flip.horizontal:
+        bboxs[:, 0] = 1.0 - bboxs[:, 0]
+    if flip.vertical:
+        bboxs[:, 1] = 1.0 - bboxs[:, 1]
+    return bboxs
+
+def flip_image_and_label(
+    img, 
+    classes,
+    bboxs, 
+    flip_param_list
+):
+    outputs = []
+    
+    for flip in flip_param_list:
+        img_f = apply_flip_image(img, flip)
+        bboxs_f = apply_flip_labels(bboxs, flip)
+        outputs.append({
+            "flip":flip,
+            "image":img_f,
+            "classes":classes,
+            "bboxs":bboxs_f
+        })
+    return outputs
