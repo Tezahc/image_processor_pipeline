@@ -1,3 +1,4 @@
+import math
 import cv2
 import random
 import numpy as np
@@ -7,7 +8,9 @@ from typing import Any, List, Optional, Tuple
 from image_processor_pipeline.utils import utils
 from ultralytics.utils.ops import xywhn2xyxy, xyxy2xywhn
 from icecream import ic
+import logging
 
+logger = logging.getLogger("crop")
 
 def _read_bboxes(filepath: Path) -> Tuple[np.ndarray, np.ndarray]:
     """Lit un fichier de labels YOLO (.txt) et renvoie les classes et bboxes.
@@ -198,6 +201,96 @@ def process_square_crop_around_bbox(
     _save_crop_files(cropped_image, (new_class_ids, new_bboxes), img_output_path, label_output_path)
 
     return [img_output_path, label_output_path]
+
+def crop_random_square(
+    image_path: Path,
+    label_path: Path,
+    output_path: Path,
+    size: int,
+    diag_range: Tuple[int, int] = (0.15, 0.30)
+):
+    # Chargement image et label
+    img = utils._load_image(image_path)
+    img_height, img_width = img.shape[:2]
+    logger.debug(f"taille d'image : {img.shape}")
+
+    classes, bboxs = _read_bboxes(label_path)
+    diag_img = math.hypot(img_width, img_height)
+    logger.debug(f"bbox raw : {bboxs}")
+
+    # calcul de la boite englobante
+    bboxs_abs = xywhn2xyxy(bboxs, img_width, img_height)
+    logger.debug(f"bbox absolues : {bboxs_abs}")
+
+    x_min, y_min = bboxs_abs[:, :2].min(axis=0)
+    x_max, y_max = bboxs_abs[:, 2:].max(axis=0)
+    logger.debug(f"Global bbox: xmin={x_min} ymin={y_min} xmax={x_max} ymax={y_max}")
+
+    global_width = x_max - x_min
+    global_height = y_max - y_min
+    logger.debug(f"Global dims: width={global_width} height={global_height}")
+
+    min_crop_size = max(global_width, global_height)
+    logger.debug(f"taille mini finale : {min_crop_size}")
+
+    # diagonales
+    diag_bbox = math.hypot(global_width, global_height)
+    bbox_diags = [math.hypot(x2-x1, y2-y1) for x1, y1, x2, y2 in bboxs_abs]
+    logger.debug(f"diag list {bbox_diags}")
+
+    # contraintes sur la diagonale du crop
+    d_min, d_max = diag_range
+    diag_crop_min = max(d / d_max for d in bbox_diags)
+    diag_crop_max = max(d / d_min for d in bbox_diags)
+    logger.debug(f"range des diagonales : {diag_crop_min}-{diag_crop_max}")
+
+    # conversion diag -> coté carré
+    side_min = diag_crop_min / math.sqrt(2)
+    side_max = diag_crop_max / math.sqrt(2)
+    logger.debug(f"Taille des cotés min/max : {side_min}/{side_max}")
+
+    # taille finale du crop
+    crop_size = max(min_crop_size, side_min)
+    logger.debug(f"Taille crop : {crop_size} ({min_crop_size}, {side_min})")
+
+    # clamp image size
+    max_possible = min(img_width, img_height)
+    logger.debug(f"taille max: {max_possible}")
+    crop_size = min(crop_size, max_possible)
+    logger.debug(f"crop size finale :{crop_size} ({crop_size}, {max_possible})")
+
+    # fallback si impossible
+    if crop_size > side_max:
+        logger.debug(f"crop_size > side max => fallback sur min_crop_size")
+        crop_size = min_crop_size
+    
+    crop_size = int(round(crop_size))
+    logger.debug(f"Tailles des diagonales : {bbox_diags}\nratios : {np.array(bbox_diags)/crop_size}")
+
+    # placement du crop (random)
+    x0_min = max(0, int(x_max - crop_size))
+    x0_max = min(int(x_min), img_width - crop_size)
+
+    y0_min = max(0, int(y_max - crop_size))
+    y0_max = min(int(y_min), img_height - crop_size)
+    logger.debug(f"coordonnées de crop min/max : {x0_min}-{x0_max} ; {y0_min}-{y0_max}")
+
+    x0 = random.randint(x0_min, x0_max) if x0_min <= x0_max else x0_min
+    y0 = random.randint(y0_min, y0_max) if y0_min <= y0_max else y0_min
+    logger.debug(f"coords roll : x0={x0} y0={y0}")
+
+    crop = img[y0 : y0+crop_size, x0 : x0+crop_size]
+    logger.debug(f"taille du crop : {crop.shape}")
+
+    logger.debug(f"{bboxs_abs}")
+    # recadrage des bbox
+    offset = np.array([x0, y0, x0, y0])
+    bboxs_abs -= offset
+    logger.debug(f"bbox_abs update : {bboxs_abs}")
+    new_bboxs_norm = xyxy2xywhn(bboxs_abs, crop.shape[0], crop.shape[1])
+
+    _save_crop_files(crop, (classes, new_bboxs_norm), output_path, output_path.with_suffix(".txt"))
+    return output_path
 
 if __name__ == '__main__':
     process_square_crop_around_bbox(
