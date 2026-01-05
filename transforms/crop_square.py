@@ -230,7 +230,7 @@ def crop_random_square(
     global_height = y_max - y_min
     logger.debug(f"Global dims: width={global_width} height={global_height}")
 
-    min_crop_size = max(global_width, global_height)
+    min_crop_size = max(global_width, global_height) # hard constraint
     logger.debug(f"taille mini finale : {min_crop_size}")
 
     # diagonales
@@ -245,27 +245,30 @@ def crop_random_square(
     logger.debug(f"range des diagonales : {diag_crop_min}-{diag_crop_max}")
 
     # conversion diag -> coté carré
+    # soft constraints
     side_min = diag_crop_min / math.sqrt(2)
     side_max = diag_crop_max / math.sqrt(2)
     logger.debug(f"Taille des cotés min/max : {side_min}/{side_max}")
 
-    # taille finale du crop
-    crop_size = max(min_crop_size, side_min)
-    logger.debug(f"Taille crop : {crop_size} ({min_crop_size}, {side_min})")
-
-    # clamp image size
+    # taille max possible dans l'image
     max_possible = min(img_width, img_height)
-    logger.debug(f"taille max: {max_possible}")
-    crop_size = min(crop_size, max_possible)
-    logger.debug(f"crop size finale :{crop_size} ({crop_size}, {max_possible})")
 
-    # fallback si impossible
-    if crop_size > side_max:
-        logger.debug(f"crop_size > side max => fallback sur min_crop_size")
-        crop_size = min_crop_size
-    
-    crop_size = int(round(crop_size))
-    logger.debug(f"Tailles des diagonales : {bbox_diags}\nratios : {np.array(bbox_diags)/crop_size}")
+    # bornes idéales du crop
+    crop_min = max(min_crop_size, side_min)
+    crop_max = min(side_max, max_possible)
+    logger.debug("Crop bounds: min=%.1f max=%.1f (min_crop=%.1f side_min=%.1f side_max=%.1f max_possible=%d)",
+    crop_min, crop_max, min_crop_size, side_min, side_max, max_possible)
+
+    if crop_min <= crop_max:
+        crop_size = random.randint(
+            int(math.ceil(crop_min)),
+            int(math.floor(crop_max))
+        )
+        logger.debug(f"Random size selected : {crop_size}")
+    else:
+        # fallbach sûr: on respecte la contrainte dure
+        crop_size = int(math.ceil(min_crop_size))
+        logger.debug(f"No valid random range, fallback crop_size={crop_size}")
 
     # placement du crop (random)
     x0_min = max(0, int(x_max - crop_size))
