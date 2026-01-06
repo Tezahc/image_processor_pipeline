@@ -10,7 +10,9 @@ from warnings import warn
 from tqdm.notebook import tqdm
 
 MODES = ('one_input', 'zip', 'modulo', 'sample', 'custom')
-
+PathsType = Path | List[Path]
+MetaType = Optional[Dict[str, Any]]
+ProcessReturn = Optional[PathsType | Tuple[PathsType, MetaType]]
 
 class ProcessingStep:
     """Représente une étape de traitement unique et configurable dans un pipeline.
@@ -482,13 +484,13 @@ class ProcessingStep:
 
                 try:
                     # Appel de la fonction de traitement
-                    saved_output_paths: Optional[Path | List[Path]] = self.process_function(
+                    saved_output: ProcessReturn = self.process_function(
                         *input_args_tuple,              # Dépaquette les chemins d'entrée
                         output_dirs=self.output_paths,  # liste des dossiers de sortie
                         **self.process_kwargs           # Passage des options en kwargs
                     )
                     # Met à jour le log
-                    success = self._build_log(log_entry, saved_output_paths)
+                    success = self._build_log(log_entry, saved_output)
                     if success:
                         success_count += 1
                     else: 
@@ -564,8 +566,8 @@ class ProcessingStep:
                     log_entry = future_to_log[future] 
 
                     try:
-                        saved_output_paths: Optional[Path | List[Path]] = future.result()  # Bloque jusqu'à résultat
-                        success = self._build_log(log_entry, saved_output_paths)
+                        saved_output: Optional[Path | List[Path]] = future.result()  # Bloque jusqu'à résultat
+                        success = self._build_log(log_entry, saved_output)
                         if success:
                             success_count += 1
                         else:
@@ -591,26 +593,25 @@ class ProcessingStep:
 
     def _build_log(self,
                    log_entry: Dict[str, Any],
-                   saved_output_paths: Optional[Path | List[Path]]
+                   saved_output: ProcessReturn # type custom
                    ) -> bool:
         """Met à jour un log_entry avec le résultat de `process_function`. Modifie le log entry directement."""
-        if saved_output_paths:
-            if isinstance(saved_output_paths, Path):
+        if saved_output:
+            if isinstance(saved_output, tuple):
+                paths, meta = saved_output
+            else:
+                paths, meta = saved_output, None
+
+            if isinstance(paths, Path):
                 # TODO: ptet forcer à output une liste de Path finalement ? (dans la process_function j'entends).
-                log_entry.update({
-                    "outputs" : [saved_output_paths],
-                    "status" : "Success"
-                })
-                return True
-            elif isinstance(saved_output_paths, list) and all(isinstance(p, Path) for p in saved_output_paths):
-                log_entry.update({
-                    "outputs" : saved_output_paths,
-                    "status" : "Success"
-                })
-                return True
+                outputs = [paths]
+
+            elif isinstance(paths, list) and all(isinstance(p, Path) for p in paths):
+                outputs = paths
+            
             else:
                 warn_msg = (f"Retour invalide (parallèle) de {self.process_function.__name__} pour "
-                            f"{[str(p) for p in log_entry["inputs"]]} (type : {type(saved_output_paths)})."
+                            f"{[str(p) for p in log_entry["inputs"]]} (type : {type(saved_output)})."
                             "Attendu Path, List[Path] ou None.")
                 warn(warn_msg)
                 log_entry.update({
@@ -618,6 +619,18 @@ class ProcessingStep:
                     "error_message" : warn_msg
                 })
                 return False
+            
+            # Si pas d'erreur, màj du log
+            log_entry.update({
+                "outputs": outputs,
+                "status": "Success"
+            })
+
+            # ajout des paramètres de process
+            if meta:
+                log_entry["meta"] = meta
+            return True
+        
         else:
             log_entry["status"] = "no_output"
             return False
