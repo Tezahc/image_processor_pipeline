@@ -12,7 +12,7 @@ ALL_SYMS :Tuple[SymmetryKey, ...]= ('o', 'h', 'v', 'hv')
 
 class SymmetrySpec(TypedDict):
     key: SymmetryKey
-    flix_x: bool
+    flip_x: bool
     flip_y: bool
 
 SYMMETRIES: dict[SymmetryKey, SymmetrySpec] = {
@@ -73,7 +73,7 @@ def apply_symmetry_image(img: np.ndarray, spec: SymmetrySpec) -> np.ndarray:
         return img.copy()
     if spec["flip_x"] and spec["flip_y"]:
         return cv2.flip(img, -1)
-    if spec["flix_x"]:
+    if spec["flip_x"]:
         return cv2.flip(img, 1)
     if spec["flip_y"]:
         return cv2.flip(img, 0)
@@ -103,7 +103,7 @@ def apply_symmetry_bboxes(
     """
     bboxes_out = bboxes.copy()
 
-    if spec["flix_x"]: 
+    if spec["flip_x"]: 
         bboxes_out[:, 0] = 1.0 - bboxes_out[:, 0]
     if spec["flip_y"]: 
         bboxes_out[:, 1] = 1.0 - bboxes_out[:, 1]
@@ -217,7 +217,6 @@ def generate_symmetries(
     
     specs = select_symmetries(pool, choose_random, include_original)
 
-    saved_paths: List[Path] = []
     metadata: Dict[str, Any] = {
         "transform": "symmetry",
         "variants": []
@@ -226,7 +225,7 @@ def generate_symmetries(
     # Sauvegarde des images générées
     saved_files: List[tuple[Path, str]] = []
     for spec in specs:
-        image_flip = apply_flip_image(image, spec)
+        image_flip = apply_symmetry_image(image, spec)
         image_name = f"{input_path.stem}_{spec['key']}"
         output_filename = input_path.with_stem(image_name)
         output_path = output_dir / output_filename.name
@@ -237,7 +236,7 @@ def generate_symmetries(
         saved_files.append(output_path)
         variant_meta: Dict[str, Any] = {
             "symmetry": spec["key"],
-            "flip_x": spec["flix_x"],
+            "flip_x": spec["flip_x"],
             "flip_y": spec["flip_y"]
         }
 
@@ -258,65 +257,7 @@ def generate_symmetries(
             variant_meta["label_path"] = label_path
         metadata["variants"].append(variant_meta)
 
-    if not saved_paths:
+    if not saved_files:
         return None
 
     return saved_files, metadata
-
-
-from dataclasses import dataclass
-
-@dataclass(frozen=True)
-class FlipParams:
-    horizontal: bool = False,
-    vertical: bool = False
-
-def generate_flips(
-    allow_horizontal=True,
-    allow_vertical=True,
-    include_identity=True,
-    randomize=True
-):
-    flips=[]
-    if include_identity:
-        flips.append(FlipParams())
-    if allow_horizontal:
-        flips.append(FlipParams(horizontal=True))
-    if allow_vertical:
-        flips.append(FlipParams(vertical=True))
-    if allow_horizontal and allow_vertical:
-        flips.append(FlipParams(True, True))
-    if randomize:
-        random.shuffle(flips)
-    return flips
-
-def apply_flip_image(img, flip: FlipParams):
-    if flip.horizontal:
-        img = np.flip(img, axis=0)
-
-def apply_flip_labels(bboxs :List[float], flip: FlipParams):
-    bboxs = bboxs.copy()
-    if flip.horizontal:
-        bboxs[:, 0] = 1.0 - bboxs[:, 0]
-    if flip.vertical:
-        bboxs[:, 1] = 1.0 - bboxs[:, 1]
-    return bboxs
-
-def flip_image_and_label(
-    img, 
-    classes,
-    bboxs, 
-    flip_param_list
-):
-    outputs = []
-    
-    for flip in flip_param_list:
-        img_f = apply_flip_image(img, flip)
-        bboxs_f = apply_flip_labels(bboxs, flip)
-        outputs.append({
-            "flip":flip,
-            "image":img_f,
-            "classes":classes,
-            "bboxs":bboxs_f
-        })
-    return outputs
