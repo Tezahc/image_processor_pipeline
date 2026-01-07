@@ -12,7 +12,7 @@ from tqdm.notebook import tqdm
 MODES = ('one_input', 'zip', 'modulo', 'sample', 'custom')
 PathsType = Path | List[Path]
 MetaType = Optional[Dict[str, Any]]
-ProcessReturn = Optional[PathsType | Tuple[PathsType, MetaType]]
+ProcessOutput = Optional[Path | List[Path] | List[Tuple[Tuple[Path, ...], Dict[str, Any]]] ]
 
 class ProcessingStep:
     """Représente une étape de traitement unique et configurable dans un pipeline.
@@ -484,7 +484,7 @@ class ProcessingStep:
 
                 try:
                     # Appel de la fonction de traitement
-                    saved_output: ProcessReturn = self.process_function(
+                    saved_output: ProcessOutput = self.process_function(
                         *input_args_tuple,              # Dépaquette les chemins d'entrée
                         output_dirs=self.output_paths,  # liste des dossiers de sortie
                         **self.process_kwargs           # Passage des options en kwargs
@@ -567,6 +567,7 @@ class ProcessingStep:
 
                     try:
                         saved_output: Optional[Path | List[Path]] = future.result()  # Bloque jusqu'à résultat
+                        #NOTE: compte sur un effet de bord de log_entry (n'est pas retournée mais au moment de l'update elle a été modifiée)
                         success = self._build_log(log_entry, saved_output)
                         if success:
                             success_count += 1
@@ -593,47 +594,60 @@ class ProcessingStep:
 
     def _build_log(self,
                    log_entry: Dict[str, Any],
-                   saved_output: ProcessReturn # type custom
+                   saved_output: ProcessOutput # type custom
                    ) -> bool:
         """Met à jour un log_entry avec le résultat de `process_function`. Modifie le log entry directement."""
-        if saved_output:
-            if isinstance(saved_output, tuple):
-                paths, meta = saved_output
-            else:
-                paths, meta = saved_output, None
-
-            if isinstance(paths, Path):
-                # TODO: ptet forcer à output une liste de Path finalement ? (dans la process_function j'entends).
-                outputs = [paths]
-
-            elif isinstance(paths, list) and all(isinstance(p, Path) for p in paths):
-                outputs = paths
-            
-            else:
-                warn_msg = (f"Retour invalide (parallèle) de {self.process_function.__name__} pour "
-                            f"{[str(p) for p in log_entry["inputs"]]} (type : {type(saved_output)})."
-                            "Attendu Path, List[Path] ou None.")
-                warn(warn_msg)
-                log_entry.update({
-                    "status" : "Type Error",
-                    "error_message" : warn_msg
-                })
-                return False
-            
-            # Si pas d'erreur, màj du log
-            log_entry.update({
-                "outputs": outputs,
-                "status": "Success"
-            })
-
-            # ajout des paramètres de process
-            if meta:
-                log_entry["meta"] = meta
-            return True
-        
-        else:
+        if saved_output is None:
             log_entry["status"] = "no_output"
             return False
+
+        # Legacy : single path
+        if isinstance(saved_output, Path):
+            # TODO: ptet forcer à output une liste de Path finalement ? (dans la process_function j'entends).
+            log_entry.update({
+                "outputs": [( (saved_output,), {})],
+                "status": "Success"
+            })
+            return True
+
+        # Legacy bis: List oh paths
+        if isinstance(saved_output, list) and saved_output and all(isinstance(p, Path) for p in saved_output):
+            log_entry.update({
+                "outputs": [((p,), {}) for p in saved_output],
+                "status": "Success"
+            })
+            return True
+
+        # Nouveau format
+        if(
+            isinstance(saved_output, list)
+            and saved_output
+            and all(
+                isinstance(item, tuple)
+                and len(item) == 2
+                and isinstance(item[0], tuple)
+                and all(isinstance(p, Path) for p in item[0])
+                and isinstance(item[1], dict)
+                for item in saved_output
+            )
+        ):
+            log_entry.update({
+                "outputs": saved_output,
+                "status": "Success"
+            })
+            return True
+        
+        # fallback : il y a eu un problème
+        warn_msg = (f"Retour invalide (parallèle) de {self.process_function.__name__} pour "
+                    f"{[str(p) for p in log_entry["inputs"]]} (type : {type(saved_output)})."
+                    f"Attendu Path, List[Path], {ProcessOutput} ou None.")
+        warn(warn_msg)
+        log_entry.update({
+            "status" : "Type Error",
+            "error_message" : warn_msg
+        })
+        return False
+        
 
     def _save_process_logs_to_json(self) -> None:
         """Sauvegarde la liste des logs de traitement dans un fichier JSON,
