@@ -147,7 +147,6 @@ def rotate_image_with_labels(
     angle_min: float = -30,
     angle_max: float = 30,
     output_prefix: str = "r",
-    original_name_suffix: str = "r000",
     name_format: str = "{prefix}{index:03d}",
     seed: Optional[int] = None,
     **options: Any
@@ -215,8 +214,9 @@ def rotate_image_with_labels(
 
     # --- Albumentations transform ---
     rotate_tf = A.Rotate(limit=(angle_min, angle_max),
-                         border_mode=cv2.BORDER_CONSTANT,
-                         fit_output=True, # deprecated ? => crop_border ?
+                         border_mode=cv2.BORDER_REPLICATE,
+                         rotate_method="ellipse",
+                         crop_border=False,
                          p=1.0)
     bbox_params = A.BboxParams(format="yolo",
                                label_fields=["class_labels"],
@@ -243,7 +243,7 @@ def rotate_image_with_labels(
         
             rotated_image = rotated["image"]
             rotated_bboxes = rotated.get("bboxes", [])
-            rotated_classes = rotated.get("classes", [])
+            rotated_classes = rotated.get("class_labels", [])
 
         suffix = name_format.format(prefix=output_prefix, index=idx)
         out_img_path = image_out_dir / f"{base_name}_{suffix}{image_path.suffix}"
