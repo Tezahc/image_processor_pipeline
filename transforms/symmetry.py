@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
 import numpy as np
 from ultralytics.data.utils import IMG_FORMATS
 from warnings import warn
+from image_processor_pipeline.utils.artifact import Artifact
 
 
 SymmetryKey = Literal['o', 'h', 'v', 'hv']
@@ -215,49 +216,48 @@ def generate_symmetries(
     if image is None:
         raise FileNotFoundError(f"[{input_path.name} - Symétrie] Impossible de charger l'image.")
     
+    # Crée le pool de symétries à faire
     specs = select_symmetries(pool, choose_random, include_original)
 
-    metadata: Dict[str, Any] = {
-        "transform": "symmetry",
-        "variants": []
-    }
-
     # Sauvegarde des images générées
-    saved_files: List[tuple[Path, str]] = []
+    outputs: List[Artifact] = []
     for spec in specs:
+        # --- Image ---
         image_flip = apply_symmetry_image(image, spec)
         image_name = f"{input_path.stem}_{spec['key']}"
-        output_filename = input_path.with_stem(image_name)
-        output_path = output_dir / output_filename.name
+        image_filename = input_path.with_stem(image_name).name
+        image_output_path = output_dirs[0] / image_filename
 
-        success = cv2.imwrite(str(output_path), image_flip)
+        success = cv2.imwrite(str(image_output_path), image_flip)
         if not success:
-            warn(f"Échec de sauvegarde de la symétrie '{spec['key']}' pour {output_path.name}. Retour False depuis `.imwrite`")
-        saved_files.append(output_path)
-        variant_meta: Dict[str, Any] = {
-            "symmetry": spec["key"],
-            "flip_x": spec["flip_x"],
-            "flip_y": spec["flip_y"]
-        }
+            warn(f"Échec de sauvegarde de la symétrie '{spec['key']}' pour {image_output_path.name}. "
+                 "Retour False depuis `.imwrite`")
+            continue
 
-        # Gestion optionnelle des labels
-        labels = None
-        if label_path is not None:
+        # --- Output entry (image toujours présente) ---
+        output_entry = Artifact(
+            image_path = image_output_path,
+            transformation = "symetry",
+            params = {
+                "symmetry": spec["key"],
+                "flip_x": spec["flip_x"],
+                "flip_y": spec["flip_y"]
+            }
+        )
+
+        # --- Labels (optionnels) ---
+        if label_path is not None and len(output_dirs) > 1:
             classes, bboxes = _read_yolo_label(label_path)
-            labels = (classes, bboxes)
-
-        if labels is not None:
-            classes, bboxes = labels
             bboxes_sym = apply_symmetry_bboxes(bboxes, spec)
 
             #TODO: check la présence du dossier d'output des labels plus proprement
-            label_path = (output_dirs[1] / image_name).with_suffix(".txt")
-            _save_yolo_labels(label_path, classes, bboxes_sym)
+            label_output_path = (output_dirs[1] / image_name).with_suffix(".txt")
+            _save_yolo_labels(label_output_path, classes, bboxes_sym)
 
-            variant_meta["label_path"] = label_path
-        metadata["variants"].append(variant_meta)
+            output_entry.label_path = label_output_path
+        outputs.append(output_entry)
 
-    if not saved_files:
+    if not outputs:
         return None
 
-    return saved_files, metadata
+    return outputs
