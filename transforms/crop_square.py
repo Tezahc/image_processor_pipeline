@@ -6,6 +6,7 @@ from warnings import warn
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 from image_processor_pipeline.utils import utils
+from image_processor_pipeline.utils.artifact import Artifact
 from ultralytics.utils.ops import xywhn2xyxy, xyxy2xywhn
 from icecream import ic
 import logging
@@ -198,9 +199,19 @@ def process_square_crop_around_bbox(
     # --- 7. Sauvegarde Image et Label ---
     img_output_path = image_target_dir / input_image_path.name
     label_output_path = label_target_dir / input_label_path.name
+    artifacts = Artifact(
+        image_path=img_output_path,
+        label_path=label_output_path,
+        transformation="crop_square",
+        params={
+            "x0": x0,
+            "y0": y0,
+            "crop_size": crop_size
+        }
+    )
     _save_crop_files(cropped_image, (new_class_ids, new_bboxes), img_output_path, label_output_path)
 
-    return [img_output_path, label_output_path]
+    return artifacts
 
 def crop_random_square(
     image_path: Path,
@@ -257,7 +268,7 @@ def crop_random_square(
     crop_min = max(min_crop_size, side_min)
     crop_max = min(side_max, max_possible)
     logger.debug("Crop bounds: min=%.1f max=%.1f (min_crop=%.1f side_min=%.1f side_max=%.1f max_possible=%d)",
-    crop_min, crop_max, min_crop_size, side_min, side_max, max_possible)
+                 crop_min, crop_max, min_crop_size, side_min, side_max, max_possible)
 
     if crop_min <= crop_max:
         crop_size = random.randint(
@@ -286,14 +297,25 @@ def crop_random_square(
     logger.debug(f"taille du crop : {crop.shape}")
 
     logger.debug(f"{bboxs_abs}")
+
     # recadrage des bbox
     offset = np.array([x0, y0, x0, y0])
     bboxs_abs -= offset
     logger.debug(f"bbox_abs update : {bboxs_abs}")
     new_bboxs_norm = xyxy2xywhn(bboxs_abs, crop.shape[0], crop.shape[1])
 
+    artifacts = Artifact(
+        image_path=output_path, 
+        label_path=output_path.with_suffix(".txt"),
+        transformation="crop_random_square",
+        params={
+            "x0": x0,
+            "y0": y0,
+            "crop_size": crop_size
+        }
+    )
     _save_crop_files(crop, (classes, new_bboxs_norm), output_path, output_path.with_suffix(".txt"))
-    return output_path
+    return artifacts
 
 if __name__ == '__main__':
     process_square_crop_around_bbox(
