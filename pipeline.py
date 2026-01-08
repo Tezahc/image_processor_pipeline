@@ -5,6 +5,7 @@ import concurrent.futures
 from os import cpu_count
 from pathlib import Path
 from collections import Counter
+from dataclasses import is_dataclass, asdict
 from typing import Any, Callable, List, Dict, Optional, Tuple, Iterator, Literal
 from warnings import warn
 from tqdm.notebook import tqdm
@@ -596,57 +597,71 @@ class ProcessingStep:
                    log_entry: Dict[str, Any],
                    saved_output: ProcessOutput # type custom
                    ) -> bool:
-        """Met à jour un log_entry avec le résultat de `process_function`. Modifie le log entry directement."""
+        """Met à jour un log_entry avec le résultat de `process_function`. 
+        Modifie le log entry directement."""
+
         if saved_output is None:
             log_entry["status"] = "no_output"
             return False
 
-        # Legacy : single path
+        outputs: List[Dict[str, Any]] = []
+
+        # Cas 1 : Legacy - single path
         if isinstance(saved_output, Path):
             # TODO: ptet forcer à output une liste de Path finalement ? (dans la process_function j'entends).
-            log_entry.update({
-                "outputs": [( (saved_output,), {})],
-                "status": "Success"
+            outputs.append({
+                "image_path": saved_output,
+                "params": None
             })
-            return True
 
-        # Legacy bis: List oh paths
-        if isinstance(saved_output, list) and saved_output and all(isinstance(p, Path) for p in saved_output):
-            log_entry.update({
-                "outputs": [((p,), {}) for p in saved_output],
-                "status": "Success"
-            })
-            return True
-
-        # Nouveau format
-        if(
-            isinstance(saved_output, list)
-            and saved_output
-            and all(
-                isinstance(item, tuple)
-                and len(item) == 2
-                and isinstance(item[0], tuple)
-                and all(isinstance(p, Path) for p in item[0])
-                and isinstance(item[1], dict)
-                for item in saved_output
+        # Cas 2 : Listes
+        elif isinstance(saved_output, list):
+            for item in saved_output:
+                # Nouveau format : Artifact
+                if hasattr(item, "to_dict") and callable(item.to_dict):
+                    outputs.append(item.to_dict())
+                
+                # Dataclass sans dict
+                elif is_dataclass(item):
+                    outputs.append(asdict(item))
+                    continue
+                
+                # Legacy : Paths
+                elif isinstance(item, Path):
+                    outputs.append({
+                        "image_path": item,
+                        "params": None
+                    })
+                
+                else:
+                    # fallback : il y a eu un problème
+                    warn_msg = (f"Retour invalide (parallèle) de {self.process_function.__name__} pour "
+                                f"{[str(p) for p in log_entry["inputs"]]} (type : {type(saved_output)})."
+                                f"Attendu Path, List[Path], {ProcessOutput} ou None.")
+                    warn(warn_msg)
+                    log_entry.update({
+                        "status" : "Type Error",
+                        "error_message" : warn_msg
+                    })
+                    return False
+        else:
+            warn_msg = (
+                f"Retour invalide de {self.process_function.__name__}"
+                f"(type {type(saved_output)})."
+                "Attendu Path, List[Path], List[Artifact] ou None"
             )
-        ):
+            warn(warn_msg)
             log_entry.update({
-                "outputs": saved_output,
-                "status": "Success"
+                "status": "Type Error",
+                "error_message": warn_msg
             })
-            return True
+            return False
         
-        # fallback : il y a eu un problème
-        warn_msg = (f"Retour invalide (parallèle) de {self.process_function.__name__} pour "
-                    f"{[str(p) for p in log_entry["inputs"]]} (type : {type(saved_output)})."
-                    f"Attendu Path, List[Path], {ProcessOutput} ou None.")
-        warn(warn_msg)
         log_entry.update({
-            "status" : "Type Error",
-            "error_message" : warn_msg
+            "outputs": outputs,
+            "status": "Success"
         })
-        return False
+        return True
         
 
     def _save_process_logs_to_json(self) -> None:
