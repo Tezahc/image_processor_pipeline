@@ -1,7 +1,12 @@
 import random
+import numpy as np
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union # Ajout des types nécessaires
 from PIL import Image, UnidentifiedImageError # Garder PIL
+import cv2
+from image_processor_pipeline.utils.artifact import Artifact
+from image_processor_pipeline.utils import utils
+import albumentations as A
 
 def process_rotations(
     input_path: Path,
@@ -47,7 +52,7 @@ def process_rotations(
     if not output_dirs:
         print(f"Erreur [{input_path.name} - Rotation]: Aucun dossier de sortie ('output_paths') fourni.")
         return None
-    target_dir = output_dirs[0]
+    target_dir = utils._validate_dirs(output_dirs, 1)
 
     # --- 2. Lecture et préparation de l'image ---
     try:
@@ -64,7 +69,7 @@ def process_rotations(
         return None
 
     # --- 3. Génération et Sauvegarde ---
-    saved_files: List[Path] = []
+    artifacts: List[Artifact] = []
     base_name = input_path.stem
     # Déterminer l'extension de sortie en fonction du format demandé
     # (PIL gère la conversion lors de la sauvegarde)
@@ -79,7 +84,8 @@ def process_rotations(
         output_file_path_orig = target_dir / output_filename_orig
         try:
             img.save(output_file_path_orig, format=output_format)
-            saved_files.append(output_file_path_orig)
+            output_orig = Artifact(output_file_path_orig, transformation="rotation", params={"angle": 0, "name_id": 0})
+            artifacts.append(output_file_path_orig)
         except Exception as e_save:
             print(f"Erreur [{input_path.name} - Rotation]: Échec sauvegarde de l'original '{output_filename_orig}': {e_save}")
             # On continue même si l'original échoue
@@ -117,7 +123,7 @@ def process_rotations(
 
                 # Sauvegarde
                 rotated_image.save(output_file_path_rot, format=output_format)
-                saved_files.append(output_file_path_rot)
+                artifacts.append(output_file_path_rot)
 
         except Exception as e_rot_save:
             # Attraper les erreurs pendant la rotation ou la sauvegarde de CETTE itération
@@ -125,9 +131,147 @@ def process_rotations(
             # On continue avec la rotation suivante
 
     # --- 4. Retour ---
-    if not saved_files:
+    if not artifacts:
         print(f"Avertissement [{input_path.name} - Rotation]: Aucune image (originale ou rotation) n'a pu être sauvegardée.")
         return None
 
     # print(f"Info [{input_path.name} - Rotation]: {len(saved_files)} image(s) sauvegardée(s).")
-    return saved_files # Retourne la liste des chemins créés
+    return artifacts # Retourne la liste des chemins créés
+
+
+def rotate_image_with_labels(
+    *input_paths: Path,
+    output_dirs: List[Path],
+    num_rotations: int = 10,
+    include_original: bool = True,
+    angle_min: float = -30,
+    angle_max: float = 30,
+    output_prefix: str = "r",
+    original_name_suffix: str = "r000",
+    name_format: str = "{prefix}{index:03d}",
+    seed: Optional[int] = None,
+    **options: Any
+) -> Optional[list[Artifact]]:
+    """
+    Génère des rotations aléatoires d'une image, avec prise en charge optionnelle
+    des labels YOLO via Albumentations.
+
+    - Les bounding boxes restent axis-aligned.
+    - Chaque sortie est décrite par un Artifact.
+    - Compatible avec ou sans labels.
+
+    Parameters
+    ----------
+    *input_paths : Path
+        input_paths[0] = image
+        input_paths[1] (optionnel) = label YOLO
+    output_dirs : list[Path]
+        output_dirs[0] = images
+        output_dirs[1] (optionnel) = labels
+    num_rotations : int
+        Nombre de rotations aléatoires.
+    include_original : bool
+        Inclure l'image originale sans transformation.
+    angle_min, angle_max : float
+        Bornes des angles de rotation (en degrés).
+    seed : Optional[int]
+        Seed aléatoire pour reproductibilité.
+
+    Returns
+    -------
+    Optional[List[Artifact]]
+    """
+
+    if not output_dirs:
+        return None
+    
+    image_path = input_paths[0]
+    label_path = input_paths[1] if len(input_paths) > 1 else None
+
+    image_out_dir = output_dirs[0]
+    label_out_dir = output_dirs[1] if len(input_paths) > 1 else None
+
+    # choix d'une seed pour permettre une reconstruction
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+    random.seed(seed)
+    np.random.seed(seed)
+
+    # --- Chargement de l'image ---
+    image = utils._load_image(image_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # chargement des labels
+    if label_path:
+        classes, bboxes = utils._read_bboxes(label_path)
+        class_labels = classes.tolist()
+        yolo_bboxes = bboxes.tolist()
+    else:
+        class_labels = []
+        yolo_bboxes = []
+    
+    artifacts: List[Artifact] = []
+    base_name = image_path.stem
+
+    # --- Albumentations transform ---
+    rotate_tf = A.Rotate(
+        limit=(angle_min, angle_max),
+        border_mode=cv2.BORDER_CONSTANT,
+        fit_output=True, # deprecated ? => crop_border ?
+        p=1.0
+    )
+    bbox_params = A.BboxParams(
+        format="yolo",
+        label_fields=["class_labels"],
+        min_visibility=0.0
+    )
+
+    # Gestion de l'orignal
+    if include_original:
+        out_img_path = image_out_dir / f"{base_name}_{original_name_suffix}{image_path.suffix}"
+        cv2.imwrite(str(out_img_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+
+        artifact_origin = Artifact(image_path=out_img_path, 
+                            transformation="rotation", 
+                            params={"angle":0.0, "seed": seed, "original":True})
+        
+        if label_path and label_out_dir:
+            out_lbl_path = label_out_dir / f"{base_name}_{original_name_suffix}.txt"
+            utils._save_yolo_labels(out_lbl_path, classes, bboxes)
+            artifact_origin.label_path = out_lbl_path
+        
+        artifacts.append(artifact_origin)
+
+    # --- Rotations ---
+    for i in range(num_rotations):
+        angle = random.uniform(angle_min, angle_max)
+
+        transform = A.Compose(
+            [rotate_tf],
+            bbox_params=bbox_params if yolo_bboxes else None
+        )
+
+        rotated = transform(image=image,
+                            bboxes=yolo_bboxes,
+                            class_labels=class_labels)
+        
+        rot_img = rotated["image"]
+        rot_bboxes = rotated.get("bboxes", [])
+        rot_classes = rotated.get("classes", [])
+
+        suffix = name_format.format(prefix=output_prefix, index=i+1)
+        out_img_path = image_out_dir / f"{base_name}_{suffix}{image_path.suffix}"
+        cv2.imwrite(str(out_img_path), cv2.cvtColor(rot_img, cv2.COLOR_RGB2BGR))
+
+        artifact = Artifact(out_img_path,
+                            transformation="rotation",
+                            params={"angle":angle, "seed":seed, "index": i+1})
+        
+        if label_path and label_out_dir:
+            out_lbl_path = label_out_dir / f"{base_name}_{suffix}.txt"
+            utils._save_yolo_labels(out_lbl_path, np.array(rot_classes), np.array(rot_bboxes))
+            artifact.label_path = out_lbl_path
+
+        artifacts.append(artifact)
+    
+    return artifacts if artifacts else None

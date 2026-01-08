@@ -126,3 +126,43 @@ def _load_image(filepath: Path) -> np.ndarray:
     if img is None:
         raise IOError(f"Impossible de charger l'image {filepath.name} via OpenCV.")
     return img
+
+def _read_bboxes(filepath: Path) -> Tuple[np.ndarray, np.ndarray]:
+    """Lit un fichier de labels YOLO (.txt) et renvoie les classes et bboxes.
+
+    Parameters
+    ----------
+    filepath : Path
+        Chemin du fichier `.txt`
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        - classes: shape (N, 1), dtype=int
+        - bboxes: shape (N, 4), format [cx, cy, w, h] normalisés
+    
+    Raises
+    ------
+    FileNotFoundError
+        Si le fichier n'existe pas.
+    ValueError
+        Si le contenu est invalide.
+    """
+    if not filepath.is_file():
+        raise FileNotFoundError(f"Fichier label non trouvé : {filepath}")
+    data = np.loadtxt(filepath, ndmin=2)
+    try:
+        classes = data[:, 0].astype(int)
+        bboxes = data[:, 1:5].astype(float)
+    except Exception as e:
+        raise ValueError(f"Format invalide dans {filepath.name}: {e}")
+    return classes, bboxes
+
+def _save_yolo_labels(
+    label_path: Path,
+    classes: np.ndarray,
+    bboxes: np.ndarray
+) -> None:
+    """Save yolo labels to a text file"""
+    data = np.column_stack((classes, bboxes))
+    np.savetxt(label_path, data, fmt=["%d", "%.6f", "%.6f", "%.6f", "%.6f"])
