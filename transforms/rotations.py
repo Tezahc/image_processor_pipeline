@@ -214,62 +214,48 @@ def rotate_image_with_labels(
     base_name = image_path.stem
 
     # --- Albumentations transform ---
-    rotate_tf = A.Rotate(
-        limit=(angle_min, angle_max),
-        border_mode=cv2.BORDER_CONSTANT,
-        fit_output=True, # deprecated ? => crop_border ?
-        p=1.0
-    )
-    bbox_params = A.BboxParams(
-        format="yolo",
-        label_fields=["class_labels"],
-        min_visibility=0.0
-    )
+    rotate_tf = A.Rotate(limit=(angle_min, angle_max),
+                         border_mode=cv2.BORDER_CONSTANT,
+                         fit_output=True, # deprecated ? => crop_border ?
+                         p=1.0)
+    bbox_params = A.BboxParams(format="yolo",
+                               label_fields=["class_labels"],
+                               min_visibility=0.0)
+    transform = A.Compose([rotate_tf],
+                          bbox_params=bbox_params if yolo_bboxes else None)
 
-    # Gestion de l'orignal
+    # Crée la liste des angles à appliquer et gère l'ajout de l'original
+    angles = [random.uniform(angle_min, angle_max) for _ in range(num_rotations)]
     if include_original:
-        out_img_path = image_out_dir / f"{base_name}_{original_name_suffix}{image_path.suffix}"
-        cv2.imwrite(str(out_img_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-
-        artifact_origin = Artifact(image_path=out_img_path, 
-                            transformation="rotation", 
-                            params={"angle":0.0, "seed": seed, "original":True})
-        
-        if label_path and label_out_dir:
-            out_lbl_path = label_out_dir / f"{base_name}_{original_name_suffix}.txt"
-            utils._save_yolo_labels(out_lbl_path, classes, bboxes)
-            artifact_origin.label_path = out_lbl_path
-        
-        artifacts.append(artifact_origin)
-
+        angles.append(0.0)
+    
     # --- Rotations ---
-    for i in range(num_rotations):
-        angle = random.uniform(angle_min, angle_max)
-
-        transform = A.Compose(
-            [rotate_tf],
-            bbox_params=bbox_params if yolo_bboxes else None
-        )
-
-        rotated = transform(image=image,
-                            bboxes=yolo_bboxes,
-                            class_labels=class_labels)
+    for idx, angle in enumerate(angles):
+        # is_original = angle == 0.0
+        if angle == 0.0: #include_original
+            rotated_image = image
+            rotated_bboxes = yolo_bboxes
+            rotated_classes = class_labels
+        else:
+            rotated = transform(image=image,
+                                bboxes=yolo_bboxes,
+                                class_labels=class_labels)
         
-        rot_img = rotated["image"]
-        rot_bboxes = rotated.get("bboxes", [])
-        rot_classes = rotated.get("classes", [])
+            rotated_image = rotated["image"]
+            rotated_bboxes = rotated.get("bboxes", [])
+            rotated_classes = rotated.get("classes", [])
 
-        suffix = name_format.format(prefix=output_prefix, index=i+1)
+        suffix = name_format.format(prefix=output_prefix, index=idx)
         out_img_path = image_out_dir / f"{base_name}_{suffix}{image_path.suffix}"
-        cv2.imwrite(str(out_img_path), cv2.cvtColor(rot_img, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(out_img_path), cv2.cvtColor(rotated_image, cv2.COLOR_RGB2BGR))
 
         artifact = Artifact(out_img_path,
                             transformation="rotation",
-                            params={"angle":angle, "seed":seed, "index": i+1})
+                            params={"angle":angle, "seed":seed, "index": idx})
         
         if label_path and label_out_dir:
             out_lbl_path = label_out_dir / f"{base_name}_{suffix}.txt"
-            utils._save_yolo_labels(out_lbl_path, np.array(rot_classes), np.array(rot_bboxes))
+            utils._save_yolo_labels(out_lbl_path, np.array(rotated_classes), np.array(rotated_bboxes))
             artifact.label_path = out_lbl_path
 
         artifacts.append(artifact)
