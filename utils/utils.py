@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
 def check_path(folder_name, root=None):
@@ -166,3 +166,103 @@ def _save_yolo_labels(
     """Save yolo labels to a text file"""
     data = np.column_stack((classes, bboxes))
     np.savetxt(label_path, data, fmt=["%d", "%.6f", "%.6f", "%.6f", "%.6f"])
+
+
+def build_output_filepath(
+    input_file: Path,
+    output_dir: Path,
+    *,
+    suffix_key: Optional[str] = None,
+    idx: Optional[int] = None,
+    name_format: str = "{key}{idx:03d}",
+    separator: str = "_",
+    **_
+) -> Path:
+    """
+    Build an output file path from an input file path, optionally adding
+    a suffix to the base filename.
+
+    The suffix is appended to the input filename stem, separated by
+    ``separator``. The suffix behavior can be controlled via ``suffix_key``
+    and ``idx``.
+
+    Parameters
+    ----------
+    input_file : pathlib.Path
+        Path to the input file.
+    output_dir : pathlib.Path
+        Path to the output file folder.
+    suffix_key : str or None, optional
+        Suffix identifier to append to the filename stem.
+
+        - ``None`` or ``"off"`` disables suffix addition.
+        - Any non-empty string is used as a suffix.
+        - An empty string is invalid and raises ``ValueError``.
+
+    idx : int or None, optional
+        Optional index used when generating the suffix. If provided, the
+        suffix is formatted using ``name_format``; otherwise, ``suffix_key``
+        is appended as-is.
+
+    name_format : str, optional
+        Format string used to build the suffix when ``idx`` is provided.
+        The format string must accept the fields ``key`` and ``idx``.
+
+        Example: ``"{key}{idx:03d}"`` → ``r005``
+
+    separator : str, optional
+        Separator used between the original filename stem and the suffix.
+
+    **_ :
+        Additional keyword arguments are ignored. This allows transparent
+        forwarding of keyword arguments from higher-level processing
+        functions.
+
+    Returns
+    -------
+    pathlib.Path
+        The constructed output file path.
+
+    Raises
+    ------
+    ValueError
+        If ``suffix_key`` is an empty string.
+    TypeError
+        If ``suffix_key`` is not a string when provided.
+
+    Examples
+    --------
+    >>> build_output_filepath(Path("file.csv"), Path("out"))
+    PosixPath('out/file.csv')
+
+    >>> build_output_filepath(Path("file.csv"), Path("out"), suffix_key="r")
+    PosixPath('out/file_r.csv')
+
+    >>> build_output_filepath(
+    ...     Path("file.csv"), Path("out"), suffix_key="r", idx=2
+    ... )
+    PosixPath('out/file_r002.csv')
+
+    >>> build_output_filepath(
+    ...     Path("file.csv"), Path("out"), suffix_key="off"
+    ... )
+    PosixPath('out/file.csv')
+    """
+
+    stem = input_file.stem
+    #TODO: permettre de changer l'extension en argument, sinon rOmet celle d'origine
+    file_suffix = input_file.suffix
+
+    parts = [stem]
+
+    if suffix_key not in (None, "off"):
+        if not isinstance(suffix_key, str) or not suffix_key:
+            raise ValueError("suffixe de nom de fichier invalide")
+        suffix = (name_format.format(key=suffix_key, idx=idx) 
+                  if idx is not None 
+                  else suffix_key)
+        parts.append(suffix)
+
+    new_stem = separator.join(parts)
+
+    return output_dir / f"{new_stem}{file_suffix}"
