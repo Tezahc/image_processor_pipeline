@@ -8,6 +8,8 @@ from PIL import Image, UnidentifiedImageError
 from ultralytics.utils.ops import xyxy2xywhn
 from deprecated import deprecated
 from icecream import ic
+from image_processor_pipeline.utils import utils
+from utils.artifact import Artifact
 
 
 def _convert_to_yolo_bbox(img_width: int, img_height: int, box: Tuple[int, int, int, int]) -> Tuple[float, float, float, float]:
@@ -27,12 +29,12 @@ def paste_overlay_onto_background(
     output_dirs: List[Path],
 
     # Reçoit les **options définies pour l'étape
-    yolo_class_id: int = 0,
+    yolo_class_id: int = 0, #TODO: passer en argument obligatoire ?
     scale_min: float = 0.15,
     scale_max: float = 0.30,
     **options: Any # Accepter d'autres options non utilisées
     # TODO: ajouter une option qui enregistre les informations d'appariement, un JSON avec overlay_name, bg_name, bbox, diag_ratio
-) -> Optional[List[Path]]: # Retourne une liste de 2 Path (image, label) ou None
+) -> Optional[List[Artifact]]: # Retourne une liste de 2 Path (image, label) ou None
     """
     Superpose une image overlay sur un fond. Sauvegarde l'image résultante et le fichier label YOLO.
 
@@ -66,7 +68,8 @@ def paste_overlay_onto_background(
 
     Returns
     -------
-    Optional[List[Path]]
+    Optional[List[Artifact]]
+        DESCRIPTION OBSOLETE #TODO
         Une liste contenant deux `Path` objets : le chemin vers l'image sauvegardée et le chemin vers le fichier label sauvegardé.  
         Retourne `None` en cas d'erreur (ex: fichier non trouvé,
         dimensions invalides, impossible de placer l'overlay, échec de sauvegarde).
@@ -159,29 +162,41 @@ def paste_overlay_onto_background(
         return None
 
     # --- 6. Sauvegarde de l'image et du label ---
-    saved_paths: List[Path] = []
+    artifacts: List[Artifact] = []
 
     # Nom basé sur l'overlay, avec préfixe
-    img_output_path = image_target_dir / f"{overlay_path.stem}{background_path.suffix}"
-    label_output_path = label_target_dir / f"{overlay_path.stem}.txt"
+    img_output_path = utils.build_output_filepath(overlay_path.with_suffix(background_path.suffix), image_target_dir)
+    label_output_path = utils.build_output_filepath(overlay_path.with_suffix(".txt"), label_target_dir)
     
     try:
+        # sauvegarde l'image
         composite_image.save(img_output_path)
-        saved_paths.append(img_output_path)
         
+        # sauvegarde le label
         with open(label_output_path, 'w', encoding='utf-8') as f:
             f.write(yolo_label_str)
-        saved_paths.append(label_output_path)
-        # --- 7. Retourner la liste des DEUX chemins ---
-        return saved_paths
+
+        # --- 7. construction des retours : artifact ---
+        artifact = Artifact(
+            image_path=img_output_path,
+            label_path=label_output_path,
+            transformation="superposition overlay on background",
+            params={"background":background_path.name, 
+                    "overlay_width": new_ov_width, "overlay_height": new_ov_height, 
+                    "x0": pos_x, "y0": pos_y}
+        )
+        artifacts.append(artifact)
+        
+        return artifacts
 
     except Exception as e_save:
         print(f"Erreur [{overlay_path.name} + {background_path.name}]: Échec lors de la sauvegarde: {e_save}")
         # import traceback
         # traceback.print_exc()
-        for p in saved_paths:
+        for p in artifacts:
             try:
-                if p.exists(): p.unlink()
+                if p.image_path.exists(): p.image_path.unlink()
+                if p.label_path.exists(): p.label_path.unlink()
             except OSError:
                 print(f"Avertissement: Impossible de nettoyer le fichier partiellement créé {p}")
         return None
