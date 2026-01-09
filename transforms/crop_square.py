@@ -11,38 +11,8 @@ from ultralytics.utils.ops import xywhn2xyxy, xyxy2xywhn
 from icecream import ic
 import logging
 
+
 logger = logging.getLogger("crop")
-
-def _read_bboxes(filepath: Path) -> Tuple[np.ndarray, np.ndarray]:
-    """Lit un fichier de labels YOLO (.txt) et renvoie les classes et bboxes.
-
-    Parameters
-    ----------
-    filepath : Path
-        Chemin du fichier `.txt`
-
-    Returns
-    -------
-    Tuple[np.ndarray, np.ndarray]
-        - classes: shape (N, 1), dtype=int
-        - bboxes: shape (N, 4), format [cx, cy, w, h] normalisés
-    
-    Raises
-    ------
-    FileNotFoundError
-        Si le fichier n'existe pas.
-    ValueError
-        Si le contenu est invalide.
-    """
-    if not filepath.is_file():
-        raise FileNotFoundError(f"Fichier label non trouvé : {filepath}")
-    data = np.loadtxt(filepath, ndmin=2)
-    try:
-        classes = data[:, 0].astype(int)
-        bboxes = data[:, 1:5].astype(float)
-    except Exception as e:
-        raise ValueError(f"Format invalide dans {filepath.name}: {e}")
-    return classes, bboxes
 
 def _save_crop_files(
     img: np.ndarray,
@@ -136,7 +106,7 @@ def process_square_crop_around_bbox(
     
     # --- 2. Chargement Image et Label ---
     image = utils._load_image(input_image_path)
-    class_ids, bboxes = _read_bboxes(input_label_path)
+    class_ids, bboxes = utils._read_bboxes(input_label_path)
     height, width = image.shape[:2]
 
     # --- 3. Conversion bbox normalisées -> absolues ---
@@ -225,7 +195,7 @@ def crop_random_square(
     img_height, img_width = img.shape[:2]
     logger.debug(f"taille d'image : {img.shape}")
 
-    classes, bboxs = _read_bboxes(label_path)
+    classes, bboxs = utils._read_bboxes(label_path)
     diag_img = math.hypot(img_width, img_height)
     logger.debug(f"bbox raw : {bboxs}")
 
