@@ -188,8 +188,9 @@ def crop_random_square(
     label_path: Path,
     output_dirs: List[Path],
     diag_range: Tuple[int, int] = (0.15, 0.30),
-    seed: int = None
-):
+    seed: Optional[int] = None,
+    **options: Any
+) -> Optional[Artifact]:
     out_image_dir, out_label_dir = utils._validate_dirs(output_dirs, 2)
 
     # Gestion de la seed pour la reproductibilité
@@ -282,8 +283,8 @@ def crop_random_square(
     logger.debug(f"bbox_abs update : {bboxs_abs}")
     new_bboxs_norm = xyxy2xywhn(bboxs_abs, crop.shape[0], crop.shape[1])
 
-    out_image_path = out_image_dir / image_path.name
-    out_label_path = out_label_dir / label_path.name
+    out_image_path = utils.build_output_filepath(image_path, out_image_dir, **options)
+    out_label_path = utils.build_output_filepath(label_path, out_label_dir, **options)
 
     _save_crop_files(crop, (classes, new_bboxs_norm), out_image_path, out_label_path)
     artifacts = Artifact(

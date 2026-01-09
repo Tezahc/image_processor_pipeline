@@ -258,6 +258,8 @@ def build_output_filepath(
     if suffix_key not in (None, "off"):
         if not isinstance(suffix_key, str) or not suffix_key:
             raise ValueError("suffixe de nom de fichier invalide")
+        
+        # mise en forme avec l'index si présent
         suffix = (name_format.format(key=suffix_key, idx=idx) 
                   if idx is not None 
                   else suffix_key)

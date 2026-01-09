@@ -6,6 +6,7 @@ import numpy as np
 from ultralytics.data.utils import IMG_FORMATS
 from warnings import warn
 from image_processor_pipeline.utils.artifact import Artifact
+from image_processor_pipeline.utils import utils
 
 
 SymmetryKey = Literal['o', 'h', 'v', 'hv']
@@ -121,12 +122,7 @@ def generate_symmetries(
     choose_random: Optional[int] = None,
     include_original: bool = True,
     **options: Any
-) -> Optional[
-    Tuple[
-        List[Path],
-        Dict[str, Any]
-    ]
-]:
+) -> Optional[list[Artifact]]:
     """
     Génère les symétries d'une image :
     
@@ -179,7 +175,7 @@ def generate_symmetries(
     
     Returns
     -------
-    Optional[List[tuple[Path, Literal['o', 'h', 'v', 'hv']]]]
+    Optional[list[Artifact]]
         Liste des chemins des fichiers sauvegardés, ou None si
         une erreur initiale se produit ou si aucune sauvegarde ne réussit.
 
@@ -196,25 +192,25 @@ def generate_symmetries(
     """
     # adapte si label est fourni ou non
     if len(inputs) == 1:
-        input_path = inputs[0]
+        image_path = inputs[0]
         label_path = None
     elif len(inputs) == 2:
-        input_path, label_path = inputs
+        image_path, label_path = inputs
     else:
         raise ValueError(f"`generate_symmetries` attend 1 ou 2 inputs, reçu {len(inputs)}")
     
     if not output_dirs:
-        raise ValueError(f"Erreur [{input_path.name} - Symétrie]: Aucun dossier de sortie ('output_dirs') fourni.")
-    output_dir = output_dirs[0]
+        raise ValueError(f"Erreur [{image_path.name} - Symétrie]: Aucun dossier de sortie ('output_dirs') fourni.")
+    image_out_dir = output_dirs[0]
 
-    if input_path.suffix.lower()[1:] not in IMG_FORMATS:
+    if image_path.suffix.lower()[1:] not in IMG_FORMATS:
         # Peut-être ouvrir à tout type d'image ?
-        raise ValueError(f"Le fichier {input_path.name} n'est pas un format accepté par Yolo.")
+        raise ValueError(f"Le fichier {image_path.name} n'est pas un format accepté par Yolo.")
 
     # Lire l'image
-    image = cv2.imread(str(input_path), cv2.IMREAD_UNCHANGED)
+    image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
     if image is None:
-        raise FileNotFoundError(f"[{input_path.name} - Symétrie] Impossible de charger l'image.")
+        raise FileNotFoundError(f"[{image_path.name} - Symétrie] Impossible de charger l'image.")
     
     # Crée le pool de symétries à faire
     specs = select_symmetries(pool, choose_random, include_original)
@@ -224,9 +220,7 @@ def generate_symmetries(
     for spec in specs:
         # --- Image ---
         image_flip = apply_symmetry_image(image, spec)
-        image_name = f"{input_path.stem}_{spec['key']}"
-        image_filename = input_path.with_stem(image_name).name
-        image_output_path = output_dirs[0] / image_filename
+        image_output_path = utils.build_output_filepath(image_path, image_out_dir, suffix_key=spec["key"])
 
         success = cv2.imwrite(str(image_output_path), image_flip)
         if not success:
@@ -251,7 +245,7 @@ def generate_symmetries(
             bboxes_sym = apply_symmetry_bboxes(bboxes, spec)
 
             #TODO: check la présence du dossier d'output des labels plus proprement
-            label_output_path = (output_dirs[1] / image_name).with_suffix(".txt")
+            label_output_path = utils.build_output_filepath(label_path, output_dirs[1], suffix_key=spec["key"])
             _save_yolo_labels(label_output_path, classes, bboxes_sym)
 
             output_entry.label_path = label_output_path

@@ -146,8 +146,6 @@ def rotate_image_with_labels(
     include_original: bool = True,
     angle_min: float = -30,
     angle_max: float = 30,
-    output_prefix: str = "r",
-    name_format: str = "{prefix}{index:03d}",
     seed: Optional[int] = None,
     **options: Any
 ) -> Optional[list[Artifact]]:
@@ -187,6 +185,7 @@ def rotate_image_with_labels(
     image_path = input_paths[0]
     label_path = input_paths[1] if len(input_paths) > 1 else None
 
+    #TODO: voir avec utils._validate_dirs ? et nb_dirs conditionnel ?
     image_out_dir = output_dirs[0]
     label_out_dir = output_dirs[1] if len(input_paths) > 1 else None
 
@@ -210,7 +209,6 @@ def rotate_image_with_labels(
         yolo_bboxes = []
     
     artifacts: List[Artifact] = []
-    base_name = image_path.stem
 
     # --- Albumentations transform ---
     rotate_tf = A.Rotate(limit=(angle_min, angle_max),
@@ -245,8 +243,12 @@ def rotate_image_with_labels(
             rotated_bboxes = rotated.get("bboxes", [])
             rotated_classes = rotated.get("class_labels", [])
 
-        suffix = name_format.format(prefix=output_prefix, index=idx)
-        out_img_path = image_out_dir / f"{base_name}_{suffix}{image_path.suffix}"
+        # setdefault permet de prendre cette valeur si l'arg n'est pas fourni. 
+        # Mais on peut toujours l'écraser en le précisant.
+        # /!\ suffix_index, s'il est précisé, est passé via les kwargs (**options)
+        options.setdefault("suffix_key", "r")
+        out_img_path = utils.build_output_filepath(image_path, image_out_dir, idx=idx, **options)
+
         cv2.imwrite(str(out_img_path), cv2.cvtColor(rotated_image, cv2.COLOR_RGB2BGR))
 
         artifact = Artifact(out_img_path,
@@ -254,7 +256,7 @@ def rotate_image_with_labels(
                             params={"angle":angle, "seed":seed, "index": idx})
         
         if label_path and label_out_dir:
-            out_lbl_path = label_out_dir / f"{base_name}_{suffix}.txt"
+            out_lbl_path = utils.build_output_filepath(label_path, label_out_dir, idx=idx, **options)
             utils._save_yolo_labels(out_lbl_path, np.array(rotated_classes), np.array(rotated_bboxes))
             artifact.label_path = out_lbl_path
 
