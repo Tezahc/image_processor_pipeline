@@ -186,10 +186,18 @@ def process_square_crop_around_bbox(
 def crop_random_square(
     image_path: Path,
     label_path: Path,
-    output_path: Path,
-    size: int,
-    diag_range: Tuple[int, int] = (0.15, 0.30)
+    output_dirs: List[Path],
+    diag_range: Tuple[int, int] = (0.15, 0.30),
+    seed: int = None
 ):
+    out_image_dir, out_label_dir = utils._validate_dirs(output_dirs, 2)
+
+    # Gestion de la seed pour la reproductibilité
+    if seed is None:
+        seed = random.randint(0, 2**32-1)
+    random.seed(seed)
+    np.random.seed(seed)
+
     # Chargement image et label
     img = utils._load_image(image_path)
     img_height, img_width = img.shape[:2]
@@ -274,17 +282,19 @@ def crop_random_square(
     logger.debug(f"bbox_abs update : {bboxs_abs}")
     new_bboxs_norm = xyxy2xywhn(bboxs_abs, crop.shape[0], crop.shape[1])
 
+    out_image_path = out_image_dir / image_path.name
+    out_label_path = out_label_dir / label_path.name
+
+    _save_crop_files(crop, (classes, new_bboxs_norm), out_image_path, out_label_path)
     artifacts = Artifact(
-        image_path=output_path, 
-        label_path=output_path.with_suffix(".txt"),
+        image_path=out_image_path, 
+        label_path=out_label_path,
         transformation="crop_random_square",
-        params={
-            "x0": x0,
-            "y0": y0,
-            "crop_size": crop_size
-        }
+        params={"x0": x0,
+                "y0": y0,
+                "crop_size": crop_size, 
+                "seed":seed}
     )
-    _save_crop_files(crop, (classes, new_bboxs_norm), output_path, output_path.with_suffix(".txt"))
     return artifacts
 
 if __name__ == '__main__':
