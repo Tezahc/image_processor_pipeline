@@ -32,6 +32,7 @@ def paste_overlay_onto_background(
     yolo_class_id: int = 0, #TODO: passer en argument obligatoire ?
     scale_min: float = 0.15,
     scale_max: float = 0.30,
+    seed: Optional[int] = None,
     **options: Any # Accepter d'autres options non utilisées
     # TODO: ajouter une option qui enregistre les informations d'appariement, un JSON avec overlay_name, bg_name, bbox, diag_ratio
 ) -> Optional[List[Artifact]]: # Retourne une liste de 2 Path (image, label) ou None
@@ -63,6 +64,9 @@ def paste_overlay_onto_background(
     scale_max : float, optional
         Ratio maximal cible de la diagonale de l'overlay par rapport à la
         diagonale de l'image de fond (ex: 0.30 pour 30%), par défaut 0.30.
+    seed : int, optional
+        Si fourni, force la seed de randomisation pour le placement de l'overlay.
+        permet de reproduire une image à l'identique avec les mêmes conditions.
     **options : Any
         Arguments supplémentaires non utilisés par cette fonction.
 
@@ -102,6 +106,12 @@ def paste_overlay_onto_background(
     except Exception as e:
         print(f"Erreur [{overlay_path.name} + {background_path.name}]: Échec lecture fichiers: {e}")
         return None
+
+    # réglage de la seed
+    if seed is None:
+        seed = random.randint(0, 2**32-1)
+    random.seed(seed)
+    np.random.seed(seed)
 
     # --- 3. Calculer taille de l'overlay ---
     try:
@@ -165,8 +175,8 @@ def paste_overlay_onto_background(
     artifacts: List[Artifact] = []
 
     # Nom basé sur l'overlay, avec préfixe
-    img_output_path = utils.build_output_filepath(overlay_path.with_suffix(background_path.suffix), image_target_dir)
-    label_output_path = utils.build_output_filepath(overlay_path.with_suffix(".txt"), label_target_dir)
+    img_output_path = utils.build_output_filepath(overlay_path.with_suffix(background_path.suffix), image_target_dir, **options)
+    label_output_path = utils.build_output_filepath(overlay_path.with_suffix(".txt"), label_target_dir, **options)
     
     try:
         # sauvegarde l'image
@@ -183,7 +193,8 @@ def paste_overlay_onto_background(
             transformation="superposition overlay on background",
             params={"background":background_path.name, 
                     "overlay_width": new_ov_width, "overlay_height": new_ov_height, 
-                    "x0": pos_x, "y0": pos_y}
+                    "x0": pos_x, "y0": pos_y, 
+                    "seed": seed}
         )
         artifacts.append(artifact)
         
