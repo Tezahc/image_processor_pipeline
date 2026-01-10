@@ -13,6 +13,7 @@ def enhance_image(
     apply_blur: bool,
     apply_rgb: bool,
     output_dirs: List[Path],
+    seed: Optional[int] = None,
     **options: Any
 ) -> Optional[List[Artifact]]:
     """Applique des transformation d'images sur un sample donné
@@ -27,6 +28,9 @@ def enhance_image(
         idem `apply_blur` pour la transof du filtre RGB
     output_dirs : List[Path]
         Liste des dossiers de destination
+    seed : int, optional
+        Permet de forcer une seed de génération aléatoire pour reproduire à l'identique la même image sur 2 exécutions différentes.
+        génère une seed aléatoire si non fourni.
 
     Returns
     -------
@@ -36,6 +40,12 @@ def enhance_image(
     destination_img = utils._validate_dirs(output_dirs, 1)
     output_path = destination_img / input_image.name
     # output_path = utils.build_output_filepath(input_image, destination_img, **options) # décommenter si besoin de formatter
+
+    # définition de la seed pour reproductibilité
+    if seed is None:
+        seed = random.randint(0, 2**32-1)
+    random.seed(seed)
+    np.random.seed(seed)
 
     brightness_factor = random.uniform(0.7, 1.3)
     contrast_factor = random.uniform(0.7, 1.3)
@@ -51,17 +61,25 @@ def enhance_image(
             img = img.filter(ImageFilter.GaussianBlur(blur_radius))
 
         if apply_rgb:
-            r, g, b = img.split()
-            r = r.point(lambda p: max(0, min(255, p * random.uniform(0.75, 1.25))))
-            g = g.point(lambda p: max(0, min(255, p * random.uniform(0.75, 1.25))))
-            b = b.point(lambda p: max(0, min(255, p * random.uniform(0.75, 1.25))))
-            img = Image.merge("RGB", (r, g, b))
+            rng = np.random.default_rng(seed)
+            img_arr = np.asarray(img, dtype=np.float32)
+
+            # génère un array de nombres (facteurs d'intensité) aléatoire pour chaque pixel et channel de l'image
+            noise = rng.uniform(0.75, 1.25, size=img_arr.shape)
+
+            # applique le facteur et le clip dans [0, 255]
+            img_arr *= noise
+            img_arr = np.clip(img_arr, 0, 255).astype(np.uint8)
+
+            # reconverti l'array np en Image PIL
+            img = Image.fromarray(img_arr, "RGB")
         
         img.save(output_path)
         artifact = Artifact(
             image_path=output_path,
             transformation="enhance image",
-            params={"brightness_factor": brightness_factor, "contrast_factor": contrast_factor, "color_factor": color_factor}
+            params={"brightness_factor": brightness_factor, "contrast_factor": contrast_factor, "color_factor": color_factor,
+                    "seed":seed}
         )
     
     return artifact
