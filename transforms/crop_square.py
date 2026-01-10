@@ -183,7 +183,7 @@ def process_square_crop_around_bbox(
 
     return artifacts
 
-def crop_random_square(
+def bbox_diagonal_crop(
     image_path: Path,
     label_path: Path,
     output_dirs: List[Path],
@@ -283,9 +283,11 @@ def crop_random_square(
     logger.debug(f"bbox_abs update : {bboxs_abs}")
     new_bboxs_norm = xyxy2xywhn(bboxs_abs, crop.shape[0], crop.shape[1])
 
+    # Construction des paths de sortie
     out_image_path = utils.build_output_filepath(image_path, out_image_dir, **options)
     out_label_path = utils.build_output_filepath(label_path, out_label_dir, **options)
 
+    # enregistrement et retour
     _save_crop_files(crop, (classes, new_bboxs_norm), out_image_path, out_label_path)
     artifacts = Artifact(
         image_path=out_image_path, 
@@ -296,7 +298,7 @@ def crop_random_square(
                 "crop_size": crop_size, 
                 "seed":seed}
     )
-    return artifacts
+    return [artifacts]
 
 if __name__ == '__main__':
     process_square_crop_around_bbox(
