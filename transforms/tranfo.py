@@ -4,7 +4,8 @@ import numpy as np
 from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter
 from typing import Any, List, Optional
-from image_processor_pipeline.utils.utils import _validate_dirs, _load_image
+from image_processor_pipeline.utils import utils
+from utils.artifact import Artifact
 
 
 def enhance_image(
@@ -13,7 +14,7 @@ def enhance_image(
     apply_rgb: bool,
     output_dirs: List[Path],
     **options: Any
-) -> Optional[Path]:
+) -> Optional[List[Artifact]]:
     """Applique des transformation d'images sur un sample donné
 
     Parameters
@@ -29,16 +30,21 @@ def enhance_image(
 
     Returns
     -------
-    Optional[Path]
+    Optional[List[Artifact]]
         Chemins enregistrés si succès
     """
-    destination_img = _validate_dirs(output_dirs, 1)
+    destination_img = utils._validate_dirs(output_dirs, 1)
     output_path = destination_img / input_image.name
-    
+    # output_path = utils.build_output_filepath(input_image, destination_img, **options) # décommenter si besoin de formatter
+
+    brightness_factor = random.uniform(0.7, 1.3)
+    contrast_factor = random.uniform(0.7, 1.3)
+    color_factor = random.uniform(0.7, 1.3)
+
     with Image.open(input_image).convert("RGB") as img:
-        img = ImageEnhance.Brightness(img).enhance(random.uniform(0.7, 1.3))
-        img = ImageEnhance.Contrast(img).enhance(random.uniform(0.7, 1.3))
-        img = ImageEnhance.Color(img).enhance(random.uniform(0.7, 1.3))
+        img = ImageEnhance.Brightness(img).enhance(brightness_factor)
+        img = ImageEnhance.Contrast(img).enhance(contrast_factor)
+        img = ImageEnhance.Color(img).enhance(color_factor)
 
         if apply_blur:
             blur_radius = random.uniform(0.5, 3)
@@ -52,8 +58,13 @@ def enhance_image(
             img = Image.merge("RGB", (r, g, b))
         
         img.save(output_path)
+        artifact = Artifact(
+            image_path=output_path,
+            transformation="enhance image",
+            params={"brightness_factor": brightness_factor, "contrast_factor": contrast_factor, "color_factor": color_factor}
+        )
     
-    return output_path
+    return artifact
 
 def gray_world_transform(img:np.ndarray) -> np.ndarray:
     """Applique une balance des blanc selon la méthode "gray world" sur une image cv2.
@@ -79,18 +90,20 @@ def gray_world_transform(img:np.ndarray) -> np.ndarray:
 
 def preprocess(input_image:Path,
                output_dirs:List[Path],
-               **kwargs):
-    image_target_dir = _validate_dirs(output_dirs, 1)
-    img = _load_image(input_image)
+               **options) -> Optional[List[Artifact]]:
+    image_target_dir = utils._validate_dirs(output_dirs, 1)
+    img = utils._load_image(input_image)
 
     balanced_image = gray_world_transform(img)
     
     output_path = image_target_dir / input_image.name
 
+    artifact = Artifact(output_path, "gray_world balance")
+
     try:
         sucess = cv2.imwrite(str(output_path), balanced_image)
         if sucess:
-            return output_path
+            return [artifact]
         else:
             print(f"Avertissement [{input_image.name} - Gray World]: Échec de sauvegarde (imwrite a retourné False) pour {output_path.name}")
             return None
