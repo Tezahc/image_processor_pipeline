@@ -9,11 +9,12 @@ from dataclasses import is_dataclass, asdict
 from typing import Any, Callable, List, Dict, Optional, Tuple, Iterator, Literal
 from warnings import warn
 from tqdm.notebook import tqdm
+from image_processor_pipeline.utils.artifact import Artifact
 
 MODES = ('one_input', 'zip', 'modulo', 'sample', 'custom')
 PathsType = Path | List[Path]
 MetaType = Optional[Dict[str, Any]]
-ProcessOutput = Optional[Path | List[Path] | List[Tuple[Tuple[Path, ...], Dict[str, Any]]] ]
+ProcessOutput = Optional[Path | List[Path] | List[Artifact] ]
 
 class ProcessingStep:
     """Représente une étape de traitement unique et configurable dans un pipeline.
@@ -235,7 +236,7 @@ class ProcessingStep:
         self.pairing_function = pairing_function
 
         # Map pour suivre les sorties générées par entrée(s)
-        self.process_logs: List[Dict[str, Any]] = []
+        self.process_logs: ProcessOutput = []
 
         # Gestion de la parallélisation
         max_cpus = cpu_count()

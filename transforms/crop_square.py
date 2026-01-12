@@ -190,7 +190,7 @@ def bbox_diagonal_crop(
     diag_range: Tuple[int, int] = (0.15, 0.30),
     seed: Optional[int] = None,
     **options: Any
-) -> Optional[Artifact]:
+) -> Optional[List[Artifact]]:
     out_image_dir, out_label_dir = utils._validate_dirs(output_dirs, 2)
 
     # Gestion de la seed pour la reproductibilité

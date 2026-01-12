@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter
 from typing import Any, List, Optional
 from image_processor_pipeline.utils import utils
-from utils.artifact import Artifact
+from image_processor_pipeline.utils.artifact import Artifact
 
 
 def enhance_image(
@@ -82,7 +82,7 @@ def enhance_image(
                     "seed":seed}
         )
     
-    return artifact
+    return [artifact]
 
 def gray_world_transform(img:np.ndarray) -> np.ndarray:
     """Applique une balance des blanc selon la méthode "gray world" sur une image cv2.
