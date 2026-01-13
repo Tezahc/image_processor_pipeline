@@ -1,3 +1,4 @@
+import inspect
 import json
 import random
 import concurrent
@@ -466,14 +467,22 @@ class ProcessingStep:
         # --- Logique Séquentielle ---
         if not self.parallels_workers or 0 <= self.parallels_workers <= 1:
             print(f"Info [{self.name}]: Exécution en mode séquentiel...")
+            sig = inspect.signature(self.process_function)
             for input_args_tuple in tqdm(argument_iterator, 
                                          desc=self.name, 
                                          total=total_items, 
                                          unit="item", 
                                          leave=True, 
                                          smoothing=0):
+                bound = sig.bind(
+                    *input_args_tuple,
+                    output_dirs=self.output_paths,
+                    **self.process_kwargs
+                )
+                bound.apply_defaults()
+
                 log_entry: Dict[str, Any] = {
-                    "inputs": list(input_args_tuple), 
+                    "inputs": bound.arguments, 
                     "outputs": None,
                     "status": "Pending",
                     "error_message": None, 
@@ -525,13 +534,23 @@ class ProcessingStep:
             with concurrent.futures.ProcessPoolExecutor(max_workers=self.parallels_workers) as executor:
                 # Dictionnaire pour mapper les futures aux arguments d'entrée (pour le logging d'erreur)
                 future_to_log: Dict[concurrent.futures.Future, Dict[str, Any]] = {}
+                # récupération de la signature de la fonction à exécuter
+                sig = inspect.signature(self.process_function)
 
                 print(f"Info [{self.name}]: Soumission de {len(list_of_input_args)} tâches au pool de processus...")
                 for input_args_tuple in list_of_input_args:
+                    # récupération des inputs envoyé lors de l'appel
+                    bound = sig.bind(
+                        *input_args_tuple,
+                        output_dirs=self.output_paths,
+                        **self.process_kwargs
+                    )
+                    bound.apply_defaults()
+
                     # pré-créer une partie de l'entrée log pour l'associer au future
                     # l'output et le statut seront mis à jour plus tard
                     log_entry = {
-                        "inputs" : list(input_args_tuple),
+                        "inputs" : bound.arguments,
                         "outputs" : None, 
                         "status" : "Pending Execution",
                         "error_message" : None,
