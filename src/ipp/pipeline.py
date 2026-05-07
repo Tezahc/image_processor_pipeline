@@ -436,6 +436,7 @@ class ProcessingStep:
             elif self.pairing_method == 'modulo': total_items = len(input_file_lists[0])
             elif self.pairing_method == 'zip': total_items = min(len(lst) for lst in input_file_lists if lst)
             elif self.pairing_method == 'sample' : total_items = min()
+            elif self.pairing_method == 'custom' : total_items = len(input_file_lists[0])
             else: raise ValueError(f"mode d'appariemment inconnu, utiliser un parmi {MODES}")
         except Exception: total_items = None
 
