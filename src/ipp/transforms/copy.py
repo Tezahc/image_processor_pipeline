@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
-from image_processor_pipeline.utils.utils import _validate_dirs
+from ipp.utils.utils import _validate_dirs
 
 def copy_img_with_labels(
     input_image_path: Path, 

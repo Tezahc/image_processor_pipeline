@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 from typing import Any, List, Tuple, Optional
-from image_processor_pipeline.utils.utils import _validate_dirs 
+from ipp.utils.utils import _validate_dirs 
 
 
 def _rescale_filter(filter_tuple: Tuple[int, int, int, int, int, int], use_gimp_scale: bool = False):

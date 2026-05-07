@@ -1,11 +1,11 @@
 import random
 import numpy as np
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union # Ajout des types nécessaires
+from typing import Optional, List, Any
 from PIL import Image, UnidentifiedImageError # Garder PIL
 import cv2
-from image_processor_pipeline.utils.artifact import Artifact
-from image_processor_pipeline.utils import utils
+from ipp.utils.artifact import Artifact
+from ipp.utils import utils
 import albumentations as A
 
 def process_rotations(

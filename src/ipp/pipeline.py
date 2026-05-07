@@ -1,19 +1,22 @@
-import json
-import random
-import concurrent
-import concurrent.futures
-from os import cpu_count
-from pathlib import Path
 from collections import Counter
 from dataclasses import is_dataclass, asdict
+import json
+from os import cpu_count
+from pathlib import Path
+import random
 from typing import Any, Callable, List, Dict, Optional, Tuple, Iterator, Literal
 from warnings import warn
+
+import concurrent
+import concurrent.futures
 from tqdm.notebook import tqdm
+
 
 MODES = ('one_input', 'zip', 'modulo', 'sample', 'custom')
 PathsType = Path | List[Path]
 MetaType = Optional[Dict[str, Any]]
 ProcessOutput = Optional[Path | List[Path] | List[Tuple[Tuple[Path, ...], Dict[str, Any]]] ]
+
 
 class ProcessingStep:
     """Représente une étape de traitement unique et configurable dans un pipeline.

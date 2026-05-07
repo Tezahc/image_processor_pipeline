@@ -5,8 +5,8 @@ import numpy as np
 from warnings import warn
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
-from image_processor_pipeline.utils import utils
-from image_processor_pipeline.utils.artifact import Artifact
+from ipp.utils import utils
+from ipp.utils.artifact import Artifact
 from ultralytics.utils.ops import xywhn2xyxy, xyxy2xywhn
 from icecream import ic
 import logging

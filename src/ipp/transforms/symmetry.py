@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
 import numpy as np
 from ultralytics.data.utils import IMG_FORMATS
 from warnings import warn
-from image_processor_pipeline.utils.artifact import Artifact
-from image_processor_pipeline.utils import utils
+from ipp.utils.artifact import Artifact
+from ipp.utils import utils
 
 
 SymmetryKey = Literal['o', 'h', 'v', 'hv']

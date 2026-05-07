@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 import cv2
 from PIL import Image
-from .crop_square import _read_bboxes
+from ipp.transforms.crop_square import _read_bboxes
 from ultralytics.utils.ops import xywhn2xyxy
 import numpy as np
 

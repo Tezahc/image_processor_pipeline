@@ -2,14 +2,14 @@ import random
 import math
 from pathlib import Path
 import numpy as np
-from image_processor_pipeline.utils import utils
+from ipp.utils import utils
 from typing import Optional, Tuple, List, Any
 from PIL import Image, UnidentifiedImageError
 from ultralytics.utils.ops import xyxy2xywhn
 from deprecated import deprecated
 from icecream import ic
-from image_processor_pipeline.utils import utils
-from utils.artifact import Artifact
+from ipp.utils import utils
+from ipp.utils.artifact import Artifact
 
 
 def _convert_to_yolo_bbox(img_width: int, img_height: int, box: Tuple[int, int, int, int]) -> Tuple[float, float, float, float]:

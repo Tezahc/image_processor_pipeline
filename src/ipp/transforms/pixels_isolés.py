@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 from typing import List
-from image_processor_pipeline.utils.utils import _validate_dirs
+from ipp.utils.utils import _validate_dirs
 
 
 def keep_largest_component(

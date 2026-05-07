@@ -4,8 +4,8 @@ import numpy as np
 from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter
 from typing import Any, List, Optional
-from image_processor_pipeline.utils import utils
-from utils.artifact import Artifact
+from ipp.utils import utils
+from ipp.utils.artifact import Artifact
 
 
 def enhance_image(
