@@ -1,0 +1,17 @@
+[project]
+name = "ipp"
+version = "0.1.0"
+description = "Outil de création de pipelines de transformations sur les images"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "albumentations>=2.0.8",
+    "deprecated>=1.3.1",
+    "icecream>=2.2.0",
+    "matplotlib>=3.10.9",
+    "numpy>=2.4.4",
+    "opencv-python>=4.13.0.92",
+    "pillow>=12.2.0",
+    "tqdm>=4.67.3",
+    "ultralytics>=8.4.21",
+]
