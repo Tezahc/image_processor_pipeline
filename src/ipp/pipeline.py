@@ -9,6 +9,7 @@ from warnings import warn
 
 import concurrent
 import concurrent.futures
+import pandas as pd
 from tqdm.notebook import tqdm
 
 
@@ -697,6 +698,96 @@ class ProcessingStep:
         except Exception as e_unexpected:
             print(f"Erreur inattendue [{self.name}] lors de la sauvegarde JSON: {e_unexpected}")
             
+class DataFrameImportStep(ProcessingStep):
+    """
+    Étape d'import dont la source est une sélection pré-filtrée (DataFrame, pickle ou CSV)
+
+    Le travail de filtrage/présélection est supposé déjà fait en amont.
+    Cette étape résout simplement les chemins vers le pool d'images
+    et les expose au pipeline comme une List[List[Path]] standard.
+
+    Parameters
+    ----------
+    source : str | Path
+        Chemin vers un fichier .pkl (DataFrame sérialisé) ou .csv,
+        OU un DataFrame pandas directement.
+    image_pool : str | Path
+        Dossier contenant le pool global d'images.
+    filename_col : str
+        Nom de la colonne contenant les noms de fichiers. Défaut : "filename".
+    process_function : Callable, optional
+        Fonction de traitement. Si None, utilise une copie simple (_copy_image).
+    **kwargs
+        Tous les autres arguments de ProcessingStep (name, output_dirs, etc.)
+    """
+
+    def __init__(
+        self,
+        source: "str | Path | pd.DataFrame",
+        image_pool: "str | Path",
+        filename_col: str = "filename",
+        **kwargs,
+    ):
+        self.source = source
+        self.image_pool = Path(image_pool)
+        self.filename_col = filename_col
+
+        # input_dirs fictif pour satisfaire la contrainte "première étape doit avoir input_dirs"
+        # on pointe vers le pool — il existe, c'est un dossier valide
+        super().__init__(
+            input_dirs=[self.image_pool],
+            **kwargs,
+        )
+
+    def _load_dataframe(self) -> pd.DataFrame:
+        """Charge le DataFrame depuis la source (pickle, csv, ou DataFrame direct)."""
+        if isinstance(self.source, pd.DataFrame):
+            return self.source
+        elif isinstance(self.source, pd.Series):
+            return pd.DataFrame(self.source)
+
+        path = Path(self.source)
+        if not path.exists():
+            raise FileNotFoundError(f"Source introuvable : {path}")
+
+        suffix = path.suffix.lower()
+        if suffix == ".pkl":
+            return pd.read_pickle(path)
+        elif suffix == ".csv":
+            return pd.read_csv(path)
+        else:
+            raise ValueError(f"Format non supporté : '{suffix}'. Utiliser .pkl ou .csv")
+
+    def _get_files_from_inputs(self) -> List[List[Path]]:
+        """
+        Surcharge : résout les chemins depuis le DataFrame
+        au lieu de scanner un dossier.
+        """
+        print(f"Info [{self.name}]: Chargement de la source...")
+        df = self._load_dataframe()
+
+        if self.filename_col not in df.columns:
+            raise KeyError(
+                f"Colonne '{self.filename_col}' introuvable. "
+                f"Colonnes disponibles : {list(df.columns)}"
+            )
+
+        resolved, missing = [], []
+        for filename in df[self.filename_col]:
+            img_path = self.image_pool / Path(filename).name
+            if img_path.exists():
+                resolved.append(img_path)
+            else:
+                missing.append(filename)
+
+        if missing:
+            warn(f"[{self.name}] {len(missing)} image(s) introuvable(s) dans le pool :\n  "
+                 + "\n  ".join(missing[:10])
+                 + ("..." if len(missing) > 10 else ""))
+
+        print(f"  {len(resolved)} images résolues ({len(missing)} manquantes).")
+        # format attendu : List[List[Path]] et on ne traite qu'un "dossier-input"
+        return [resolved]  
 
 class ProcessingPipeline:
     """Orchestre une séquence d'étapes de traitement (`ProcessingStep`).
