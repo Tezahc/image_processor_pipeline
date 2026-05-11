@@ -7,8 +7,8 @@ import numpy as np
 from PIL import Image
 from ultralytics.utils.ops import xywhn2xyxy
 
-from utils.artifact import Artifact
-from utils import utils
+from ..utils.artifact import Artifact
+from ..utils import utils
 
 
 def _compute_crop(value, total_length):
@@ -323,7 +323,7 @@ def zoom_crop(
     out_label_path = out_label_dir / label_path.name
     with out_label_path.open("w", encoding="utf-8") as f:
         for cls_id, (cx, cy, w, h) in zip(new_class_ids, new_bboxes):
-            f.write(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+            f.write(f"{int(cls_id)} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
 
     # --- 8. Construction et retour de l'Artifact ---
     artifact = Artifact(
