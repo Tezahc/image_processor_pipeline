@@ -1,11 +1,14 @@
-import math
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
+
+import albumentations as A
 import cv2
-from PIL import Image
-from .crop_square import _read_bboxes
-from ultralytics.utils.ops import xywhn2xyxy
 import numpy as np
+from PIL import Image
+from ultralytics.utils.ops import xywhn2xyxy
+
+from utils.artifact import Artifact
+from utils import utils
 
 
 def _compute_crop(value, total_length):
@@ -120,7 +123,7 @@ def crop_bbox(
     if not label_path.exists():
         print(f"aucun fichier de label trouvé pour l'image {image_path.name}.")
         return
-    classes, bboxes = _read_bboxes(label_path)
+    classes, bboxes = utils._read_bboxes(label_path)
     
     # agrandir la zone de crop pour que la bbox soit `size`% de la zone
     # on agrandit les width et height des bbox (xywh)
@@ -138,3 +141,207 @@ def crop_bbox(
 
         save_path = output_dirs / image_path.with_stem(f"{cls:02}-{image_path.stem}-id{i}").name
         cv2.imwrite(str(save_path), detection)
+
+
+def _compute_crop(value: float, total_length: int) -> int:
+    """Convertit une marge de rognage en pixels.
+
+    Parameters
+    ----------
+    value : float
+        Marge à appliquer.
+        - 0 <= value < 1 : interprété comme un pourcentage de `total_length`.
+        - value >= 1      : interprété comme un nombre de pixels fixe.
+    total_length : int
+        Dimension de référence (hauteur ou largeur) pour le calcul du pourcentage.
+
+    Raises
+    ------
+    ValueError
+        Si `value` est strictement négatif.
+    """
+    if value < 0:
+        raise ValueError(f"Les valeurs de rognage ne peuvent pas être négatives (reçu : {value}).")
+    return int(total_length * value) if value < 1 else int(value)
+
+
+def zoom_crop(
+    image_path: Path,
+    label_path: Path,
+    output_dirs: List[Path],
+    crop_margins: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),
+    min_bbox_visibility: float = 0.1,
+    **options: Any,
+) -> Optional[List[Artifact]]:
+    """Rogne une image par ses bords avec gestion des labels YOLO associés.
+
+    Découpe `crop_margins` sur chacun des quatre bords et recalcule les
+    annotations YOLO en conséquence. Les bbox dont la surface visible après
+    crop est inférieure à `min_bbox_visibility` sont supprimées.
+
+    Ce recadrage est dit « centré » lorsque des marges symétriques sont
+    fournies — par exemple ``(0.25, 0.25, 0.25, 0.25)`` pour conserver
+    exactement 50 % de l'image originale — mais des marges asymétriques
+    sont tout autant supportées.
+
+    Parameters
+    ----------
+    image_path : Path
+        Chemin du fichier image d'entrée.
+    label_path : Path
+        Chemin du fichier de labels YOLO associé (.txt, format cx cy w h normalisé).
+    output_dirs : List[Path]
+        Liste d'au moins deux répertoires : ``[images_dir, labels_dir]``.
+    crop_margins : Tuple[float, float, float, float]
+        Marges de rognage dans l'ordre ``(top, bottom, left, right)``.
+
+        - ``0 <= v < 1`` → pourcentage de la dimension correspondante.
+          Exemple : ``0.25`` retire 25 % de la hauteur/largeur de ce côté.
+        - ``v >= 1``      → nombre de pixels fixes (converti en ``int``).
+
+        Pour un crop centré conservant 50 % : ``(0.25, 0.25, 0.25, 0.25)``.
+        Pour retirer 10 px en haut uniquement : ``(10, 0, 0, 0)``.
+    min_bbox_visibility : float, default=0.1
+        Fraction minimale de la surface d'une bbox qui doit rester visible
+        après crop pour qu'elle soit conservée dans les labels de sortie.
+        Entre 0 (tout garder) et 1 (exiger bbox intacte). Défaut : 0.1.
+    **options : Any
+        Arguments supplémentaires ignorés (compatibilité pipeline).
+
+    Returns
+    -------
+    Optional[List[Artifact]]
+        Liste contenant un unique :class:`Artifact` avec les chemins image
+        et label de sortie, ainsi que les paramètres du crop.
+        Retourne ``None`` si l'image ne peut pas être chargée.
+
+    Raises
+    ------
+    FileNotFoundError
+        Si l'image ou le label d'entrée est introuvable.
+    IndexError
+        Si ``output_dirs`` contient moins de deux éléments.
+    ValueError
+        Si les marges dépassent les dimensions de l'image, ou sont négatives.
+    IOError
+        Si l'écriture de l'image de sortie échoue.
+
+    Examples
+    --------
+    Crop centré conservant 50 % de l'image (25 % supprimés sur chaque bord) :
+
+    >>> artifacts = zoom_crop(
+    ...     image_path=Path("data/imgs/img001.jpg"),
+    ...     label_path=Path("data/labels/img001.txt"),
+    ...     output_dirs=[Path("out/imgs"), Path("out/labels")],
+    ...     crop_margins=(0.25, 0.25, 0.25, 0.25),
+    ... )
+
+    Retirer 80 px en haut et 40 px à gauche, rien ailleurs :
+
+    >>> artifacts = zoom_crop(
+    ...     image_path=Path("data/imgs/img001.jpg"),
+    ...     label_path=Path("data/labels/img001.txt"),
+    ...     output_dirs=[Path("out/imgs"), Path("out/labels")],
+    ...     crop_margins=(80, 0, 40, 0),
+    ... )
+    """
+    # --- 1. Validation des répertoires de sortie ---
+    if len(output_dirs) < 2:
+        raise IndexError(
+            f"zoom_crop requiert au moins 2 répertoires de sortie "
+            f"[images, labels], reçu : {len(output_dirs)}."
+        )
+    out_image_dir, out_label_dir = utils._validate_dirs(output_dirs, 2)
+
+    # --- 2. Chargement de l'image ---
+    if not image_path.exists():
+        raise FileNotFoundError(f"Image introuvable : {image_path}")
+    image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise FileNotFoundError(f"Impossible de lire l'image : {image_path.name}")
+    height, width = image.shape[:2]
+
+    # --- 3. Calcul des marges en pixels ---
+    crop_top, crop_bottom, crop_left, crop_right = crop_margins
+    top_px    = _compute_crop(crop_top,    height)
+    bottom_px = _compute_crop(crop_bottom, height)
+    left_px   = _compute_crop(crop_left,   width)
+    right_px  = _compute_crop(crop_right,  width)
+
+    if top_px + bottom_px >= height:
+        raise ValueError(
+            f"Marges verticales ({top_px} + {bottom_px} px) ≥ hauteur "
+            f"({height} px) pour {image_path.name}."
+        )
+    if left_px + right_px >= width:
+        raise ValueError(
+            f"Marges horizontales ({left_px} + {right_px} px) ≥ largeur "
+            f"({width} px) pour {image_path.name}."
+        )
+
+    # --- 4. Chargement des labels YOLO ---
+    if not label_path.exists():
+        raise FileNotFoundError(f"Label introuvable : {label_path}")
+    class_ids, bboxes = utils._read_bboxes(label_path)  # bboxes : (N, 4) float, format YOLO normalisé
+
+    # --- 5. Crop image + recalcul des bbox via Albumentations ---
+    # Albumentations gère nativement le format YOLO (cx, cy, w, h normalisé)
+    # et filtre les bbox dont la surface visible < min_bbox_visibility.
+    transform = A.Compose(
+        [
+            A.Crop(
+                x_min=left_px,
+                y_min=top_px,
+                x_max=width  - right_px,
+                y_max=height - bottom_px,
+            )
+        ],
+        bbox_params=A.BboxParams(
+            format="yolo",
+            label_fields=["class_labels"],
+            min_visibility=min_bbox_visibility,
+        ),
+    )
+
+    result = transform(
+        image=image,
+        bboxes=bboxes.tolist(),
+        class_labels=class_ids.tolist(),
+    )
+
+    cropped_image  = result["image"]
+    new_bboxes     = result["bboxes"]       # List[Tuple[cx, cy, w, h]]
+    new_class_ids  = result["class_labels"]
+
+    # --- 6. Sauvegarde image ---
+    out_image_path = out_image_dir / image_path.name
+    if not cv2.imwrite(str(out_image_path), cropped_image):
+        raise IOError(f"Échec écriture image : {out_image_path}")
+
+    # --- 7. Sauvegarde labels ---
+    out_label_path = out_label_dir / label_path.name
+    with out_label_path.open("w", encoding="utf-8") as f:
+        for cls_id, (cx, cy, w, h) in zip(new_class_ids, new_bboxes):
+            f.write(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+
+    # --- 8. Construction et retour de l'Artifact ---
+    artifact = Artifact(
+        image_path=out_image_path,
+        label_path=out_label_path,
+        transformation="zoom_crop",
+        params={
+            "crop_px": {
+                "top":    top_px,
+                "bottom": bottom_px,
+                "left":   left_px,
+                "right":  right_px,
+            },
+            "original_size": {"width": width, "height": height},
+            "output_size": {
+                "width":  width  - left_px - right_px,
+                "height": height - top_px  - bottom_px,
+            }
+        }
+    )
+    return [artifact]
