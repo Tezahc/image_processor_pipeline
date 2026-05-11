@@ -116,7 +116,7 @@ def preprocess(input_image:Path,
     
     output_path = image_target_dir / input_image.name
 
-    artifact = Artifact(output_path, "gray_world balance")
+    artifact = Artifact(output_path, "gray_world balance", None)
 
     try:
         sucess = cv2.imwrite(str(output_path), balanced_image)
