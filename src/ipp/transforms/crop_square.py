@@ -1,15 +1,19 @@
-import math
 import cv2
-import random
-import numpy as np
-from warnings import warn
+import logging
+import math
 from pathlib import Path
+import random
 from typing import Any, List, Optional, Tuple
+from warnings import warn
+
+import albumentations as A
+from icecream import ic
+import numpy as np
+from PIL import Image, ImageOps
+from ultralytics.utils.ops import xywhn2xyxy, xyxy2xywhn
+
 from ipp.utils import utils
 from ipp.utils.artifact import Artifact
-from ultralytics.utils.ops import xywhn2xyxy, xyxy2xywhn
-from icecream import ic
-import logging
 
 
 logger = logging.getLogger("crop")
@@ -306,3 +310,206 @@ if __name__ == '__main__':
         Path('crop_carre_test/labels/CARESITE38.txt'),
         ["CropCarre/imgs", "CropCarre/labels"]
     )
+
+
+class YoloSegHandler:
+    """
+    Classe utilitaire pour gérer les conversions entre les fichiers de segmentation YOLO 
+    (coordonnées normalisées) et les masques Numpy (pixels bruts), et vice-versa.
+    """
+    def __init__(self, w: int, h: int):
+        self.width = w
+        self.height = h
+        self.mask = np.zeros((h, w), dtype=np.uint8)
+
+    def load_from_yolo(self, label_path: Path):
+        """Lit un fichier YOLO et dessine les polygones sur le masque interne."""
+        if not label_path.exists():
+            return
+
+        with label_path.open("r") as f:
+            for line in f:
+                parts = list(map(float, line.strip().split()))
+                if not parts:
+                    continue
+                
+                class_id = int(parts[0])
+                # Rescale normalized coordinates to pixel values
+                coords = np.array(parts[1:], dtype=np.float32).reshape(-1, 2) * [self.width, self.height]
+                
+                # Use cv2 to draw a filled polygon (valeur = class_id + 1 pour ne pas confondre la classe 0 avec le fond noir)
+                cv2.fillPoly(self.mask, [coords.astype(np.int32)], class_id + 1)
+
+    def update_mask(self, new_mask: np.ndarray):
+        """Met à jour le masque et recadre les dimensions après transformation."""
+        self.mask = new_mask
+        self.height, self.width = new_mask.shape[:2]
+    
+    def to_yolo_lines(self) -> List[str]:
+        """
+        Extrait les contours d'un masque Numpy et retourne les lignes 
+        au format YOLO segmentation (class_id x1 y1 xn yn ... normalisés).
+        """
+        yolo_lines = []
+        # On trouve toutes les classes présentes dans le masque (en ignorant le fond 0)
+        classes = np.unique(self.mask)
+        
+        for cls_val in classes:
+            if cls_val == 0:
+                continue
+                
+            class_id = cls_val - 1  # Restauration de l'ID d'origine
+            
+            # Création d'un masque binaire pour cette classe spécifique
+            binary_mask = (self.mask == cls_val).astype(np.uint8) * 255
+            
+            # Extraction des contours
+            contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            for contour in contours:
+                # Filtrer les contours trop petits (ex: moins de 3 points)
+                if contour.shape[0] < 3:
+                    continue
+                    
+                # Redimensionnement sécurisé du contour en array 2D [N, 2]
+                coords = contour.reshape(-1, 2).astype(np.float32)
+                
+                # Renormalisation par rapport à la taille de l'image patchée
+                coords /= [self.width, self.height]
+                
+                # Formatage en string
+                coords_str = " ".join([f"{x:.6f} {y:.6f}" for x, y in coords])
+                yolo_lines.append(f"{class_id} {coords_str}")
+                
+        return yolo_lines
+    
+def crop_around_poi(
+    image_path: Path, 
+    yolo_label_path: Path, 
+    bbox: list, 
+    output_dir: Path, 
+    output_filename_prefix: str,
+    ratio: float = 1.0, 
+    margin: int = 0,
+    fixed_base_size: int = None
+) -> List[Artifact]:
+    """
+    Applique un rognage carré centré sur un point d'intérêt simultanément à une image et son masque.
+    
+    :param bbox: [xmin, ymin, xmax, ymax]
+    """
+    # 1. Lecture image et masque (gestion des chemins sécurisée avec Pathlib)
+    # L'image est chargée en RGB car Albumentations travaille de base de manière optimale en RGB
+    # image = cv2.imread(str(image_path))
+    # image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    if not image_path.exists():
+        raise FileNotFoundError(f"Image introuvable : {image_path}")
+    
+    image = Image.open(image_path)
+    ImageOps.exif_transpose(image, in_place=True)
+    if image is None:
+        raise FileNotFoundError(f"Image introuvable : {image_path}")
+    
+    image_np = np.array(image)
+    w_img, h_img = image.size
+    
+    # Le masque est chargé en niveau de gris (1 seul canal)
+    seg_handler = YoloSegHandler(w_img, h_img)
+    seg_handler.load_from_yolo(yolo_label_path)
+
+    xc_norm, yc_norm, w_norm, h_norm = bbox
+    cx = xc_norm * w_img
+    cy = yc_norm * h_img
+    w_box = w_norm * w_img
+    h_box = h_norm * h_img
+
+    # 3. Calcul de la taille de base (largeur/hauteur de la bbox ou taille fixe)
+    if fixed_base_size:
+        base_size = fixed_base_size
+    else:
+        base_size = max(w_box, h_box)
+        
+    # 4. Paramétrage "save_one_box" : Taille finale du côté du carré
+    final_size = int(base_size * ratio + 2 * margin)
+    half_size = final_size / 2.0
+    
+    # 5. Coordonnées théoriques du crop
+    crop_xmin = int(cx - half_size)
+    crop_xmax = int(cx + half_size)
+    crop_ymin = int(cy - half_size)
+    crop_ymax = int(cy + half_size)
+    
+    # 6. Gestion des débordements (Padding) si le centre est proche des bords
+    # On calcule combien de pixels manquent pour faire un vrai carré complet
+    pad_top = max(0, -crop_ymin)
+    pad_bottom = max(0, crop_ymax - h_img)
+    pad_left = max(0, -crop_xmin)
+    pad_right = max(0, crop_xmax - w_img)
+    
+    # 7. Pipeline Albumentations (Version 2.0.8)
+    transform = A.Compose([
+        # Étape A: On pad l'image si les limites sortent de l'image source (avec du noir / 0)
+        A.PadIfNeeded(
+            min_height=h_img + pad_top + pad_bottom,
+            min_width=w_img + pad_left + pad_right,
+            border_mode=cv2.BORDER_CONSTANT,
+            fill=0,      # Valeur de remplissage image
+            fill_mask=0  # Valeur de remplissage masque
+        ),
+        # Étape B: Rognage exact du carré maintenant que les bordures sont sécurisées
+        A.Crop(
+            x_min=crop_xmin + pad_left,
+            y_min=crop_ymin + pad_top,
+            x_max=crop_xmax + pad_left,
+            y_max=crop_ymax + pad_top
+        )
+    ])
+    
+    # Application de la transformation liée !
+    augmented = transform(image=image_np, mask=seg_handler.mask)
+    cropped_image = augmented['image']
+    seg_handler.update_mask(augmented['mask'])
+    
+    yolo_output_lines = seg_handler.to_yolo_lines()
+
+    # 8. Préparation des chemins de sauvegarde
+    out_img_dir = output_dir / "images"
+    out_mask_dir = output_dir / "labels"
+    # TODO: plus nécessaire une fois dans pip
+    out_img_dir.mkdir(parents=True, exist_ok=True)
+    out_mask_dir.mkdir(parents=True, exist_ok=True)
+    
+    out_img_path = out_img_dir / f"{output_filename_prefix}.jpg"
+    out_label_path = out_mask_dir / f"{output_filename_prefix}.txt"
+    
+    # 9. Sauvegarde (retour en BGR pour OpenCV)
+    Image.fromarray(cropped_image).save(out_img_path, quality=95)
+    # cv2.imwrite(str(out_img_path), cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR))
+    
+    with out_label_path.open("w", encoding="utf-8") as l:
+        l.write("\n".join(yolo_output_lines) + '\n')
+    
+    artifact = Artifact(
+        image_path=out_img_path,
+        transformation="crop_and_pad_from_point",
+        params={
+            "original_bbox": bbox,
+            "center": [cx, cy],
+            "crop_ratio": ratio,
+            "crop_margin": margin,
+            "final_size": final_size,
+            "padding_applied": {
+                "top": pad_top, "bottom": pad_bottom, 
+                "left": pad_left, "right": pad_right
+            }
+        },
+        label_path=out_label_path,
+        extra={
+            "source_image": image_path.name,
+            "source_label": yolo_label_path.name,
+            "polygons_found":len(yolo_output_lines)
+        }
+    )
+
+    return [artifact]

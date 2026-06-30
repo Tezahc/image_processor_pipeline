@@ -5,7 +5,7 @@ from os import cpu_count
 from pathlib import Path
 import random
 from typing import Any, Callable, List, Dict, Optional, Tuple, Iterator, Literal
-from warnings import warn
+from warnings import warn #, deprecated # python >= 3.13
 
 import concurrent
 import concurrent.futures
@@ -697,7 +697,9 @@ class ProcessingStep:
             print(f"Erreur critique [{self.name}]: Impossible d'enregistrer le fichier JSON des résultats: {e}")
         except Exception as e_unexpected:
             print(f"Erreur inattendue [{self.name}] lors de la sauvegarde JSON: {e_unexpected}")
-            
+
+#TODO: dispo uniquement en python >= 3.13
+# @deprecated("Préférer DataFrameProcessingStep. Plus complet (imo)")
 class DataFrameImportStep(ProcessingStep):
     """
     Étape d'import dont la source est une sélection pré-filtrée (DataFrame, pickle ou CSV)
@@ -788,6 +790,186 @@ class DataFrameImportStep(ProcessingStep):
         print(f"  {len(resolved)} images résolues ({len(missing)} manquantes).")
         # format attendu : List[List[Path]] et on ne traite qu'un "dossier-input"
         return [resolved]  
+
+class DataFrameProcessingStep(ProcessingStep):
+    """Étape de traitement dont chaque appel correspond à une ligne d'un DataFrame pré-joint.
+
+    Conçue pour les cas où :
+    - les entrées sont hétérogènes (chemins + données scalaires/listes),
+    - la relation source → sorties est 1→N (ex : plusieurs bboxes par image),
+    - le croisement des inputs est déjà réalisé en amont (jointure dans le DataFrame).
+
+    Chaque ligne du DataFrame produit exactement un appel à `process_function` :
+    
+    .. code-block:: python
+
+        process_function(
+            Path(row[path_cols[0]]),   # args positionnels — chemins résolus
+            Path(row[path_cols[1]]),
+            row[data_cols[0]],         # args positionnels — données brutes
+            row[data_cols[1]],
+            output_dirs=...,           # kwarg standard du pipeline
+            **options                  # options partagées entre tous les appels
+        )
+
+    Parameters
+    ----------
+    source : str | Path | pd.DataFrame
+        Chemin vers un fichier .pkl/.csv, ou DataFrame pandas directement.
+        Si fichier, le format est détecté depuis l'extension.
+    path_cols : List[str]
+        Colonnes contenant des chemins de fichiers → résolus en ``Path`` et passés
+        comme premiers arguments positionnels à ``process_function``.
+    data_cols : List[str], optional
+        Colonnes contenant des données non-chemin (bbox, prefix de sortie, flags…)
+        → passées telles quelles, après les path_cols.
+    **kwargs
+        Tous les autres arguments de ``ProcessingStep``
+        (``name``, ``output_dirs``, ``options``, ``workers``…).
+
+    Notes
+    -----
+    ``input_dirs`` n'est pas utilisé (les entrées viennent du DataFrame).
+    Un dummy ``[Path('.')]`` est injecté en interne pour satisfaire le check
+    ``ProcessingPipeline.add_step`` (qui exige ``input_paths`` non-vide
+    sur la première étape). Il est ignoré lors de l'exécution.
+
+    Preparation du DataFrame (exemple pour le cas crop_poi) :
+
+    .. code-block:: python
+
+        df = df_bboxes.merge(df_images, on='image_id')  # jointure 1→N
+        df['output_prefix'] = (
+            df['image_stem']
+            + '_crop_'
+            + df.groupby('image_stem').cumcount().astype(str).str.zfill(4)
+        )
+        step = DataFrameProcessingStep(
+            name="crop_poi",
+            source=df,
+            path_cols=["image_path", "label_path"],
+            data_cols=["bbox", "output_prefix"],
+            output_dirs=[images_out_dir, labels_out_dir],
+            options={"ratio": 1.5, "margin": 10},
+        )
+
+    Examples
+    --------
+    >>> import tempfile, pandas as pd
+    >>> from pathlib import Path
+
+    >>> def dummy_process(img_path, lbl_path, bbox, prefix, output_dirs, **opts):
+    ...     out = output_dirs[0] / f"{prefix}.txt"
+    ...     out.write_text(f"{img_path.name}|{bbox}")
+    ...     return out
+
+    >>> with tempfile.TemporaryDirectory() as tmp:
+    ...     d = Path(tmp)
+    ...     imgs = d / "imgs"; imgs.mkdir()
+    ...     lbls = d / "lbls"; lbls.mkdir()
+    ...     out  = d / "out";  out.mkdir()
+    ...     (imgs / "a.jpg").touch()
+    ...     (lbls / "a.txt").touch()
+    ...     df = pd.DataFrame({
+    ...         "image_path": [str(imgs / "a.jpg"), str(imgs / "a.jpg")],
+    ...         "label_path": [str(lbls / "a.txt"), str(lbls / "a.txt")],
+    ...         "bbox": [[0.5, 0.5, 0.1, 0.1], [0.3, 0.3, 0.2, 0.2]],
+    ...         "output_prefix": ["a_crop_0000", "a_crop_0001"],
+    ...     })
+    ...     step = DataFrameProcessingStep(
+    ...         name="test",
+    ...         source=df,
+    ...         path_cols=["image_path", "label_path"],
+    ...         data_cols=["bbox", "output_prefix"],
+    ...         output_dirs=[out],
+    ...         process_function=dummy_process,
+    ...     )
+    ...     step.run()
+    ...     sorted(p.name for p in out.iterdir())
+    ['a_crop_0000.txt', 'a_crop_0001.txt']
+    """
+
+    def __init__(
+        self,
+        source: "str | Path | pd.DataFrame",
+        path_cols: List[str],
+        data_cols: Optional[List[str]] = None,
+        **kwargs,
+    ):
+        self.source = source
+        self.path_cols = path_cols
+        self.data_cols = data_cols or []
+        self._df: Optional[pd.DataFrame] = None
+
+        # Dummy input_dirs : non vide pour satisfaire ProcessingPipeline.add_step,
+        # mais jamais utilisé par _get_files_from_inputs (surchargée ci-dessous).
+        dummy_input = [Path(source)] if isinstance(source, (str, Path)) else [Path(".")]
+
+        super().__init__(input_dirs=dummy_input, **kwargs)
+
+    def _load_dataframe(self) -> pd.DataFrame:
+        """Charge le DataFrame depuis la source (pickle, csv, ou DataFrame direct)."""
+        if isinstance(self.source, pd.DataFrame):
+            return self.source.copy()
+        elif isinstance(self.source, pd.Series):
+            return pd.DataFrame(self.source)
+
+        path = Path(self.source)
+        if not path.exists():
+            raise FileNotFoundError(f"Source introuvable : {path}")
+
+        suffix = path.suffix.lower()
+        if suffix == ".pkl":
+            return pd.read_pickle(path)
+        elif suffix == ".csv":
+            return pd.read_csv(path)
+        else:
+            raise ValueError(
+                f"Format non supporté : '{suffix}'. Utiliser .pkl ou .csv"
+            )
+
+    def _get_files_from_inputs(self) -> List[List[Any]]:
+        """Surcharge : charge et valide le DataFrame au lieu de scanner un dossier.
+
+        Retourne une liste factice de taille n (nombre de lignes) pour que
+        ``run()`` calcule correctement ``total_items`` en mode 'one_input'.
+        """
+        print(f"Info [{self.name}]: Chargement du DataFrame source...")
+        self._df = self._load_dataframe()
+
+        all_cols = self.path_cols + self.data_cols
+        missing = [c for c in all_cols if c not in self._df.columns]
+        if missing:
+            raise KeyError(
+                f"Colonnes manquantes dans le DataFrame : {missing}. "
+                f"Colonnes disponibles : {list(self._df.columns)}"
+            )
+
+        n = len(self._df)
+        n_u = len(self._df.iloc[:, 1].unique())
+        print(
+            f"  {n_u} input(s) → {n} appel(s) à '{self.process_function.__name__}' "
+            f"({'|'.join(self.path_cols + self.data_cols)})."
+        )
+        # Liste factice de n éléments : seule la longueur est utilisée par run()
+        return [list(range(n))]
+
+    def _generate_processing_inputs(
+        self, input_file_lists: List[List[Any]]
+    ) -> Iterator[Tuple]:
+        """Surcharge : génère les tuples d'arguments depuis le DataFrame.
+
+        ``input_file_lists`` est ignoré (liste factice issue de ``_get_files_from_inputs``).
+        """
+        if self._df is None:
+            raise RuntimeError(
+                f"[{self.name}] DataFrame non chargé — appeler _get_files_from_inputs d'abord."
+            )
+
+        for _, row in self._df.iterrows():
+            paths = tuple(Path(row[col]) for col in self.path_cols)
+            data  = tuple(row[col] for col in self.data_cols)
+            yield paths + data
 
 class ProcessingPipeline:
     """Orchestre une séquence d'étapes de traitement (`ProcessingStep`).
