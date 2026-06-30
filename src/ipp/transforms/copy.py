@@ -1,7 +1,11 @@
-import shutil
 from pathlib import Path
+import shutil
 from typing import Any, List, Optional, Tuple
-from ipp.utils.utils import _validate_dirs
+
+from PIL import Image, ImageOps
+from ipp.utils.artifact import Artifact
+from ipp.utils import utils
+
 
 def copy_img_with_labels(
     input_image_path: Path, 
@@ -47,7 +51,7 @@ def copy_files(
         Optionnal[Path]
 
     """
-    output_dir = _validate_dirs(output_dirs, 1)
+    output_dir = utils._validate_dirs(output_dirs, 1)
 
     if suffix and replace_params:
         raise ValueError(f"un seul des 2 paramètres `replace_param` et `suffix` doit être renseigné")
@@ -65,3 +69,26 @@ def copy_files(
         out = shutil.copy2(input_file, output_dir)
     
     return Path(out)
+
+def copy_from_label(
+    input_label: Path,
+    output_dirs: List[Path],
+    images_source_dir: Path,
+    **options: Any
+) -> Optional[List[Artifact]]:
+    output_dir = utils._validate_dirs(output_dirs, 1)
+
+    try:
+        image_path = next(images_source_dir.rglob(f"{input_label.stem}*"))
+    except StopIteration:
+        raise StopIteration(f"fichier image {input_label.stem} non trouvé.")
+    
+    image = Image.open(image_path)
+    ImageOps.exif_transpose(image, in_place=True)
+    image.save(output_dir/image_path.name)
+
+    artifact = Artifact(input_label, 
+                        "copy_from_label", 
+                        params={"images_dir": images_source_dir, "image_path": image_path})
+    
+    return [artifact]
