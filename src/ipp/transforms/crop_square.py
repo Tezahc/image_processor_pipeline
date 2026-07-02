@@ -385,10 +385,10 @@ class YoloSegHandler:
     
 def crop_around_poi(
     image_path: Path, 
-    yolo_label_path: Path, 
+    seg_label_path: Path, 
     bbox: list, 
-    output_dir: Path, 
-    output_filename_prefix: str,
+    filename_suffix: str,
+    output_dirs: Path, 
     ratio: float = 1.0, 
     margin: int = 0,
     fixed_base_size: int = None
@@ -406,6 +406,8 @@ def crop_around_poi(
     if not image_path.exists():
         raise FileNotFoundError(f"Image introuvable : {image_path}")
     
+    out_img_dir, out_mask_dir = utils._validate_dirs(output_dirs, 2)
+
     image = Image.open(image_path)
     ImageOps.exif_transpose(image, in_place=True)
     if image is None:
@@ -416,7 +418,7 @@ def crop_around_poi(
     
     # Le masque est chargé en niveau de gris (1 seul canal)
     seg_handler = YoloSegHandler(w_img, h_img)
-    seg_handler.load_from_yolo(yolo_label_path)
+    seg_handler.load_from_yolo(seg_label_path)
 
     xc_norm, yc_norm, w_norm, h_norm = bbox
     cx = xc_norm * w_img
@@ -474,14 +476,8 @@ def crop_around_poi(
     yolo_output_lines = seg_handler.to_yolo_lines()
 
     # 8. Préparation des chemins de sauvegarde
-    out_img_dir = output_dir / "images"
-    out_mask_dir = output_dir / "labels"
-    # TODO: plus nécessaire une fois dans pip
-    out_img_dir.mkdir(parents=True, exist_ok=True)
-    out_mask_dir.mkdir(parents=True, exist_ok=True)
-    
-    out_img_path = out_img_dir / f"{output_filename_prefix}.jpg"
-    out_label_path = out_mask_dir / f"{output_filename_prefix}.txt"
+    out_img_path = out_img_dir / image_path.with_stem(f"{image_path.stem}_{filename_suffix}")
+    out_label_path = out_mask_dir / seg_label_path.with_stem(f"{seg_label_path.stem}_{filename_suffix}")
     
     # 9. Sauvegarde (retour en BGR pour OpenCV)
     Image.fromarray(cropped_image).save(out_img_path, quality=95)
@@ -507,7 +503,7 @@ def crop_around_poi(
         label_path=out_label_path,
         extra={
             "source_image": image_path.name,
-            "source_label": yolo_label_path.name,
+            "source_label": seg_label_path.name,
             "polygons_found":len(yolo_output_lines)
         }
     )
