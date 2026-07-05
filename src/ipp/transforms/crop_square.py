@@ -320,10 +320,12 @@ class YoloSegHandler:
     def __init__(self, w: int, h: int):
         self.width = w
         self.height = h
-        self.mask = np.zeros((h, w), dtype=np.uint8)
+        self.masks: List[np.ndarray] = [] # Liste des masques individuels
+        #np.zeros((h, w), dtype=np.uint8)
+        self.class_ids: List[int] = []
 
     def load_from_yolo(self, label_path: Path):
-        """Lit un fichier YOLO et dessine les polygones sur le masque interne."""
+        """Lit un fichier YOLO et génère un masque par polygone."""
         if not label_path.exists():
             return
 
@@ -338,12 +340,18 @@ class YoloSegHandler:
                 coords = np.array(parts[1:], dtype=np.float32).reshape(-1, 2) * [self.width, self.height]
                 
                 # Use cv2 to draw a filled polygon (valeur = class_id + 1 pour ne pas confondre la classe 0 avec le fond noir)
-                cv2.fillPoly(self.mask, [coords.astype(np.int32)], class_id + 1)
+                # Création d'un masque bonaire UNIQUE pour cette instance
+                instance_mask = np.zeros((self.height, self.width), dtype=np.uint8)
+                cv2.fillPoly(instance_mask, [coords.astype(np.int32)], 255)
 
-    def update_mask(self, new_mask: np.ndarray):
-        """Met à jour le masque et recadre les dimensions après transformation."""
-        self.mask = new_mask
-        self.height, self.width = new_mask.shape[:2]
+                self.masks.append(instance_mask)
+                self.class_ids.append(class_id)
+
+    def update_mask(self, new_masks: List[np.ndarray], new_h: int, new_w: int):
+        """Met à jour la liste de masques et les dimensions après Albumentations."""
+        self.masks = new_masks
+        self.height = new_h
+        self.width = new_w
     
     def to_yolo_lines(self) -> List[str]:
         """
@@ -351,20 +359,10 @@ class YoloSegHandler:
         au format YOLO segmentation (class_id x1 y1 xn yn ... normalisés).
         """
         yolo_lines = []
-        # On trouve toutes les classes présentes dans le masque (en ignorant le fond 0)
-        classes = np.unique(self.mask)
         
-        for cls_val in classes:
-            if cls_val == 0:
-                continue
-                
-            class_id = cls_val - 1  # Restauration de l'ID d'origine
-            
-            # Création d'un masque binaire pour cette classe spécifique
-            binary_mask = (self.mask == cls_val).astype(np.uint8) * 255
-            
+        for class_id, mask in zip(self.class_ids, self.masks):
             # Extraction des contours
-            contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
             for contour in contours:
                 # Filtrer les contours trop petits (ex: moins de 3 points)
@@ -382,7 +380,7 @@ class YoloSegHandler:
                 yolo_lines.append(f"{class_id} {coords_str}")
                 
         return yolo_lines
-    
+
 def crop_around_poi(
     image_path: Path, 
     seg_label_path: Path, 
@@ -467,17 +465,26 @@ def crop_around_poi(
             y_max=crop_ymax + pad_top
         )
     ])
+
+    # On utilise l'argument pluriel `masks=` pour passer notre liste de polygones
+    if seg_handler.masks:
+        augmented = transform(image=image_np, masks=seg_handler.masks)
+        new_masks = augmented["masks"]
+    else:
+        # l'image n'a pas de label associé
+        augmented = transform(image=image_np)
+        new_masks = []
     
-    # Application de la transformation liée !
-    augmented = transform(image=image_np, mask=seg_handler.mask)
     cropped_image = augmented['image']
-    seg_handler.update_mask(augmented['mask'])
+    new_h, new_w = cropped_image.shape[:2]
+
+    seg_handler.update_mask(new_masks, new_h, new_w)
     
     yolo_output_lines = seg_handler.to_yolo_lines()
 
     # 8. Préparation des chemins de sauvegarde
-    out_img_path = out_img_dir / image_path.with_stem(f"{image_path.stem}_{filename_suffix}")
-    out_label_path = out_mask_dir / seg_label_path.with_stem(f"{seg_label_path.stem}_{filename_suffix}")
+    out_img_path = out_img_dir / image_path.with_stem(f"{image_path.stem}_{filename_suffix}").name
+    out_label_path = out_mask_dir / seg_label_path.with_stem(f"{seg_label_path.stem}_{filename_suffix}").name
     
     # 9. Sauvegarde (retour en BGR pour OpenCV)
     Image.fromarray(cropped_image).save(out_img_path, quality=95)
@@ -488,7 +495,7 @@ def crop_around_poi(
     
     artifact = Artifact(
         image_path=out_img_path,
-        transformation="crop_and_pad_from_point",
+        transformation=crop_around_poi.__name__,
         params={
             "original_bbox": bbox,
             "center": [cx, cy],
