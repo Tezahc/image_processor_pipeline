@@ -14,6 +14,7 @@ from ultralytics.utils.ops import xywhn2xyxy, xyxy2xywhn
 
 from ipp.utils import utils
 from ipp.utils.artifact import Artifact
+from ipp.utils.yolo_labels import YoloLabelHandler, YoloLabel, BBoxLabel, SegmentationLabel
 
 
 logger = logging.getLogger("crop")
@@ -312,75 +313,6 @@ if __name__ == '__main__':
     )
 
 
-class YoloSegHandler:
-    """
-    Classe utilitaire pour gérer les conversions entre les fichiers de segmentation YOLO 
-    (coordonnées normalisées) et les masques Numpy (pixels bruts), et vice-versa.
-    """
-    def __init__(self, w: int, h: int):
-        self.width = w
-        self.height = h
-        self.masks: List[np.ndarray] = [] # Liste des masques individuels
-        #np.zeros((h, w), dtype=np.uint8)
-        self.class_ids: List[int] = []
-
-    def load_from_yolo(self, label_path: Path):
-        """Lit un fichier YOLO et génère un masque par polygone."""
-        if not label_path.exists():
-            return
-
-        with label_path.open("r") as f:
-            for line in f:
-                parts = list(map(float, line.strip().split()))
-                if not parts:
-                    continue
-                
-                class_id = int(parts[0])
-                # Rescale normalized coordinates to pixel values
-                coords = np.array(parts[1:], dtype=np.float32).reshape(-1, 2) * [self.width, self.height]
-                
-                # Use cv2 to draw a filled polygon (valeur = class_id + 1 pour ne pas confondre la classe 0 avec le fond noir)
-                # Création d'un masque bonaire UNIQUE pour cette instance
-                instance_mask = np.zeros((self.height, self.width), dtype=np.uint8)
-                cv2.fillPoly(instance_mask, [coords.astype(np.int32)], 255)
-
-                self.masks.append(instance_mask)
-                self.class_ids.append(class_id)
-
-    def update_mask(self, new_masks: List[np.ndarray], new_h: int, new_w: int):
-        """Met à jour la liste de masques et les dimensions après Albumentations."""
-        self.masks = new_masks
-        self.height = new_h
-        self.width = new_w
-    
-    def to_yolo_lines(self) -> List[str]:
-        """
-        Extrait les contours d'un masque Numpy et retourne les lignes 
-        au format YOLO segmentation (class_id x1 y1 xn yn ... normalisés).
-        """
-        yolo_lines = []
-        
-        for class_id, mask in zip(self.class_ids, self.masks):
-            # Extraction des contours
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            for contour in contours:
-                # Filtrer les contours trop petits (ex: moins de 3 points)
-                if contour.shape[0] < 3:
-                    continue
-                    
-                # Redimensionnement sécurisé du contour en array 2D [N, 2]
-                coords = contour.reshape(-1, 2).astype(np.float32)
-                
-                # Renormalisation par rapport à la taille de l'image patchée
-                coords /= [self.width, self.height]
-                
-                # Formatage en string
-                coords_str = " ".join([f"{x:.6f} {y:.6f}" for x, y in coords])
-                yolo_lines.append(f"{class_id} {coords_str}")
-                
-        return yolo_lines
-
 def crop_around_poi(
     image_path: Path, 
     seg_label_path: Path, 
@@ -415,8 +347,8 @@ def crop_around_poi(
     w_img, h_img = image.size
     
     # Le masque est chargé en niveau de gris (1 seul canal)
-    seg_handler = YoloSegHandler(w_img, h_img)
-    seg_handler.load_from_yolo(seg_label_path)
+    lbl_handler = YoloLabelHandler(w_img, h_img)
+    lbl_handler.load(seg_label_path)
 
     xc_norm, yc_norm, w_norm, h_norm = bbox
     cx = xc_norm * w_img
@@ -466,9 +398,9 @@ def crop_around_poi(
         )
     ])
 
-    # On utilise l'argument pluriel `masks=` pour passer notre liste de polygones
-    if seg_handler.masks:
-        augmented = transform(image=image_np, masks=seg_handler.masks)
+    masks, seg_classes = lbl_handler.as_masks()
+    if masks:
+        augmented = transform(image=image_np, masks=masks)
         new_masks = augmented["masks"]
     else:
         # l'image n'a pas de label associé
@@ -476,22 +408,16 @@ def crop_around_poi(
         new_masks = []
     
     cropped_image = augmented['image']
-    new_h, new_w = cropped_image.shape[:2]
-
-    seg_handler.update_mask(new_masks, new_h, new_w)
-    
-    yolo_output_lines = seg_handler.to_yolo_lines()
+    lbl_handler.update_from_masks(new_masks, seg_classes)
 
     # 8. Préparation des chemins de sauvegarde
     out_img_path = out_img_dir / image_path.with_stem(f"{image_path.stem}_{filename_suffix}").name
     out_label_path = out_mask_dir / seg_label_path.with_stem(f"{seg_label_path.stem}_{filename_suffix}").name
+    lbl_handler.save(out_label_path)
     
     # 9. Sauvegarde (retour en BGR pour OpenCV)
     Image.fromarray(cropped_image).save(out_img_path, quality=95)
     # cv2.imwrite(str(out_img_path), cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR))
-    
-    with out_label_path.open("w", encoding="utf-8") as l:
-        l.write("\n".join(yolo_output_lines) + '\n')
     
     artifact = Artifact(
         image_path=out_img_path,
@@ -511,7 +437,7 @@ def crop_around_poi(
         extra={
             "source_image": image_path.name,
             "source_label": seg_label_path.name,
-            "polygons_found":len(yolo_output_lines)
+            "polygons_found":len(lbl_handler)
         }
     )
 

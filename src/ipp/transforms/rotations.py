@@ -1,12 +1,17 @@
-import random
-import numpy as np
 from pathlib import Path
+import random
 from typing import Optional, List, Any
-from PIL import Image, UnidentifiedImageError # Garder PIL
-import cv2
-from ipp.utils.artifact import Artifact
-from ipp.utils import utils
+
 import albumentations as A
+import cv2
+import numpy as np
+from PIL import Image, UnidentifiedImageError # Garder PIL
+from ultralytics.data.utils import IMG_FORMATS
+
+from ipp.utils import utils
+from ipp.utils.artifact import Artifact
+from ipp.utils.yolo_labels import YoloLabelHandler
+
 
 def process_rotations(
     input_path: Path,
@@ -146,6 +151,7 @@ def rotate_image_with_labels(
     include_original: bool = True,
     angle_min: float = -30,
     angle_max: float = 30,
+    crop_border: bool = False,
     seed: Optional[int] = None,
     **options: Any
 ) -> Optional[list[Artifact]]:
@@ -178,35 +184,63 @@ def rotate_image_with_labels(
     -------
     Optional[List[Artifact]]
     """
-
-    if not output_dirs:
-        return None
-    
     image_path = input_paths[0]
     label_path = input_paths[1] if len(input_paths) > 1 else None
 
+    if image_path.suffix.lower()[1:] not in IMG_FORMATS:
+        raise ValueError(f"Format non supporté : {image_path.name}")
+
+    has_labels = label_path is not None
+
     #TODO: voir avec utils._validate_dirs ? et nb_dirs conditionnel ?
+    if not output_dirs:
+        raise ValueError(f"Erreur [{image_path.name}] : aucun dossier de sortie ('output_dirs') fourni.")
+    if has_labels and len(output_dirs) < 2:
+        raise ValueError(
+            f"Erreur [{image_path.name}] : labels fournis mais un seul dossier "
+            "de sortie configuré. Deux requis (images, labels)."
+        )
     image_out_dir = output_dirs[0]
-    label_out_dir = output_dirs[1] if len(input_paths) > 1 else None
+    label_out_dir = output_dirs[1] if has_labels else None
 
     # choix d'une seed pour permettre une reconstruction
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
-    random.seed(seed)
-    np.random.seed(seed)
+
+    # Crée la liste des angles à appliquer et gère l'ajout de l'original
+    rng = random.Random(seed)
+    angles = [rng.uniform(angle_min, angle_max) for _ in range(num_rotations)]
+    if include_original:
+        angles.append(0.0)
+    
+    trace = {
+        "num_rotations": num_rotations,
+        "angle_bounds": (angle_min, angle_max),
+        "crop_border": crop_border,
+        "seed": seed,
+        "applied_angles": angles
+    }
 
     # --- Chargement de l'image ---
     image = utils._load_image(image_path)
+    # Albumentations travaille en RGB
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    img_h, img_w = image.shape[:2]
 
-    # chargement des labels
-    if label_path:
-        classes, bboxes = utils._read_bboxes(label_path)
-        class_labels = classes.tolist()
-        yolo_bboxes = bboxes.tolist()
-    else:
-        class_labels = []
-        yolo_bboxes = []
+    # --- Chargement des labels ---
+    handler = None
+    compose_kwargs: dict = {}
+    call_kwargs_labels: dict = {}
+    meta: dict = {}
+
+    if has_labels:
+        handler = YoloLabelHandler.from_file(label_path, img_h, img_w)
+        compose_kwargs, call_kwargs_labels, meta = handler.to_albumentations(
+            img_w, img_h,
+            use_masks=True  # rotation libre : les polygones peuvent être découpés par le bord,
+                            # un masque → raster → contour donne un résultat géométriquement correct.
+                            # Les keypoints clippés distordent le polygone.
+        )
     
     artifacts: List[Artifact] = []
 
@@ -219,29 +253,21 @@ def rotate_image_with_labels(
     bbox_params = A.BboxParams(format="yolo",
                                label_fields=["class_labels"],
                                min_visibility=0.0)
-    transform = A.Compose([rotate_tf],
-                          bbox_params=bbox_params if yolo_bboxes else None)
+    transform = A.Compose([rotate_tf], **compose_kwargs)
 
-    # Crée la liste des angles à appliquer et gère l'ajout de l'original
-    angles = [random.uniform(angle_min, angle_max) for _ in range(num_rotations)]
-    if include_original:
-        angles.append(0.0)
     
     # --- Rotations ---
     for idx, angle in enumerate(angles):
         # is_original = angle == 0.0
-        if angle == 0.0: #include_original
-            rotated_image = image
-            rotated_bboxes = yolo_bboxes
-            rotated_classes = class_labels
-        else:
-            rotated = transform(image=image,
-                                bboxes=yolo_bboxes,
-                                class_labels=class_labels)
+        is_original = (angle == 0.0) #include_original
         
+        if is_original:
+            rotated_image = image
+            transformed = {"image": image, **call_kwargs_labels}
+        else:
+            rotated = transform(image=image, **call_kwargs_labels)
             rotated_image = rotated["image"]
-            rotated_bboxes = rotated.get("bboxes", [])
-            rotated_classes = rotated.get("class_labels", [])
+            transformed = rotated
 
         # setdefault permet de prendre cette valeur si l'arg n'est pas fourni. 
         # Mais on peut toujours l'écraser en le précisant.
@@ -255,9 +281,25 @@ def rotate_image_with_labels(
                             transformation="rotation",
                             params={"angle":angle, "seed":seed, "index": idx})
         
-        if label_path and label_out_dir:
+        if handler is not None and label_out_dir:
             out_lbl_path = utils.build_output_filepath(label_path, label_out_dir, idx=idx, **options)
-            utils._save_yolo_labels(out_lbl_path, np.array(rotated_classes), np.array(rotated_bboxes))
+            img_h_t, img_w_t = rotated_image.shape[:2]
+            out_handler = YoloLabelHandler(img_h_t, img_w_t)
+
+            # Bbox
+            out_handler.update_bboxes(
+                transformed.get("bboxes", []),
+                transformed.get("bboxes_classes", []),
+                replace=False
+            )
+
+            # Segmentation (reconstruite depuis les masques transformés)
+            out_handler.update_from_masks(
+                transformed.get("masks", []),
+                meta.get("seg_classes", []),
+                replace=False
+            )
+            out_handler.save(out_lbl_path)
             artifact.label_path = out_lbl_path
 
         artifacts.append(artifact)

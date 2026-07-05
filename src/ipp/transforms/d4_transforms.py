@@ -18,7 +18,7 @@ from warnings import warn
 
 import cv2
 import numpy as np
-
+from ultralytics.data.utils import IMG_FORMATS
 try:
     import albumentations as A
 except ImportError:
@@ -27,10 +27,10 @@ except ImportError:
         "Installez-le avec 'pip install albumentations' (ou albumentationsx)."
     )
 
-from ultralytics.data.utils import IMG_FORMATS
-
-from ipp.utils.artifact import Artifact
 from ipp.utils import utils
+from ipp.utils.artifact import Artifact
+from ipp.utils.yolo_labels import YoloLabelHandler
+
 
 D4Key = Literal["e", "h", "v", "r90", "r180", "r270", "t", "hvt"]
 ALL_D4_KEYS = get_args(D4Key)
@@ -95,93 +95,6 @@ def select_d4_transforms(
     return selected, trace
 
 
-def _read_yolo_labels(
-    label_path: Path, 
-    img_w: int, 
-    img_h: int
-) -> Tuple[List[list], List[int], List[tuple], List[int], List[int]]:
-    """Lit un fichier de labels YOLO et sépare les BBox des Polygones.
-    Détecte automatiquement le format selon le nombre de coordonnées.
-    Dénormalise les polygones en pixels absolus pour Albumentations (keypoints).
-    """
-    bboxes = []
-    bbox_classes = []
-    
-    keypoints = []
-    poly_classes = []
-    poly_lengths = []
-    
-    with label_path.open("r", encoding="utf-8") as f:
-        for line_num, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            parts = line.split()
-            try:
-                cls_id = int(float(parts[0]))
-                coords = list(map(float, parts[1:]))
-            except ValueError as e:
-                raise ValueError(f"Ligne {line_num} invalide dans {label_path.name} : {e}") from e
-            
-            if len(coords) == 4:
-                # BBox classique [cx, cy, w, h] normalisée
-                bboxes.append(coords)
-                bbox_classes.append(cls_id)
-            elif len(coords) >= 6 and len(coords) % 2 == 0:
-                # Segmentation [x1, y1, x2, y2...] normalisée
-                poly_lengths.append(len(coords) // 2)
-                poly_classes.append(cls_id)
-                for i in range(0, len(coords), 2):
-                    # Dénormalisation en pixels absolus pour A.KeypointParams(format='xy')
-                    x = coords[i] * img_w
-                    y = coords[i+1] * img_h
-                    keypoints.append((x, y))
-            else:
-                #TODO: implem en cas d'impair : le dernier item = score confiance
-                raise ValueError(
-                    f"Ligne {line_num} de {label_path.name} : format non reconnu "
-                    f"({len(coords)} coordonnées). Attendu 4 (bbox) ou pair >= 6 (polygone)."
-                )
-                
-    return bboxes, bbox_classes, keypoints, poly_classes, poly_lengths
-
-
-def _write_yolo_labels(
-    out_path: Path,
-    bboxes: List[list],
-    bbox_classes: List[int],
-    keypoints: List[tuple],
-    poly_classes: List[int],
-    poly_lengths: List[int],
-    img_w: int,
-    img_h: int
-) -> None:
-    """Enregistre les BBoxes et les Polygones dans un fichier YOLO.
-    Renormalise les polygones en [0, 1] en fonction des dimensions (transformées) de l'image.
-    """
-    with out_path.open("w", encoding="utf-8") as f:
-        # 1. BBoxes (déjà normalisées par Albumentations, format='yolo')
-        for cls_id, bbox in zip(bbox_classes, bboxes):
-            coords_str = " ".join(f"{x:.6f}" for x in bbox)
-            f.write(f"{cls_id} {coords_str}\n")
-            
-        # 2. Polygones (à renormaliser depuis les keypoints)
-        kp_idx = 0
-        for cls_id, length in zip(poly_classes, poly_lengths):
-            poly_kps = keypoints[kp_idx : kp_idx + length]
-            kp_idx += length
-            
-            poly_coords = []
-            for x, y in poly_kps:
-                # Renormalisation [0, 1] par rapport aux nouvelles dimensions (img_w, img_h)
-                nx = max(0.0, min(1.0, x / img_w))
-                ny = max(0.0, min(1.0, y / img_h))
-                poly_coords.extend([nx, ny])
-                
-            coords_str = " ".join(f"{v:.6f}" for v in poly_coords)
-            f.write(f"{cls_id} {coords_str}\n")
-
-
 def generate_d4_transforms(
     *inputs: Path,
     output_dirs: List[Path],
@@ -226,7 +139,7 @@ def generate_d4_transforms(
         Tire aléatoirement ce nombre de transformations uniques dans le pool.
         Si `None`, applique tout le pool.
     add_original_copy : bool, default=True
-        Si True, ajoute systématiquement l'image originale ('e') sauf si déjà présente
+        Si True, ajoute systématiquement l'image originale ('e') sauf si déjà présente.
     seed : int, optional
         Graine pour la reproductibilité du tirage aléatoire.
     **options : Any
@@ -237,7 +150,7 @@ def generate_d4_transforms(
     Optional[List[Artifact]]
         Un `Artifact` par transformation sauvegardée.
     """
-    # 1. Validation des arguments et dossiers
+    # 1. Validation
     if len(inputs) == 1:
         image_path, label_path = inputs[0], None
     elif len(inputs) == 2:
@@ -261,95 +174,82 @@ def generate_d4_transforms(
     if image_path.suffix.lower()[1:] not in IMG_FORMATS:
         raise ValueError(f"Le fichier {image_path.name} n'est pas un format d'image supporté.")
 
-    # 2. Chargement des données
+    # 2. Chargement de l'image
     image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
     if image is None:
         raise FileNotFoundError(f"[{image_path.name} - D4] Impossible de charger l'image.")
+    img_h, img_w = image.shape[:2]
 
     selected, trace = select_d4_transforms(mode, pool, choose_random, add_original_copy, seed)
 
-    classes = bboxes = keypoints = poly_classes = poly_lengths = None
-    kp_classes = []
-    
-    if has_labels:
-        img_h, img_w = image.shape[:2]
-        bboxes, bbox_classes, keypoints, poly_classes, poly_lengths = _read_yolo_labels(
-            label_path, img_w, img_h
-        )
-        # Création d'une liste de classes "plate" pour que chaque keypoint ait son label
-        # (requis par le fonctionnement strict d'Albumentations pour les keypoints)
-        for c, length in zip(poly_classes, poly_lengths):
-            kp_classes.extend([c] * length)
+    # 3. Chargement des labels via le handler — une seule lecture pour toutes les transformations.
+    #    compose_kwargs / call_kwargs sont identiques pour chaque clé D4 (seul A.D4 change) :
+    #    on les construit une fois, avant la boucle.
+    compose_kwargs: dict = {}
+    call_kwargs: dict = {}
+    meta: dict = {}
 
-    # 3. Application des transformations via Albumentations
+    if has_labels:
+        handler = YoloLabelHandler.from_file(label_path, img_w, img_h)
+        compose_kwargs, call_kwargs, meta = handler.to_albumentations(
+            img_w, img_h, use_masks=False  # keypoints : D4 est bijectif, aucun point ne sort de l'image
+        )
+
+    # 4. Boucle de transformations
     outputs: List[Artifact] = []
     for key in selected:
-        compose_kwargs = {}
-        call_kwargs = {"image": image}
-        
-        # Configuration dynamique d'Albumentations.
-        # N'ajoute les paramètres (BBox, Keypoints) QUE s'ils sont présents dans le label
-        # pour éviter des erreurs inutiles d'Albumentations avec des arrays vides.
-        if has_labels:
-            if bboxes:
-                compose_kwargs["bbox_params"] = A.BboxParams(format="yolo", label_fields=["bbox_classes"])
-                call_kwargs["bboxes"] = bboxes
-                call_kwargs["bbox_classes"] = bbox_classes
-            if keypoints:
-                compose_kwargs["keypoint_params"] = A.KeypointParams(
-                    coord_format="xy", label_fields=["kp_classes"], remove_invisible=False
-                )
-                call_kwargs["keypoints"] = keypoints
-                call_kwargs["kp_classes"] = kp_classes
-
-        # Instanciation de la transformation "en force" sur la déclinaison voulue via group_element
+        # A.D4 doit être instancié par clé (group_element fixé à la construction)
         transform = A.Compose([A.D4(p=1.0, group_element=key)], **compose_kwargs)
-        
+
         try:
-            transformed = transform(**call_kwargs)
+            transformed = transform(image=image, **call_kwargs)
         except Exception as e:
-            warn(f"Échec de l'application de la transformation D4 '{key}' sur {image_path.name} : {e}")
+            warn(f"Échec D4 '{key}' sur {image_path.name} : {e}")
             continue
-            
+
         image_t = transformed["image"]
+        img_h_t, img_w_t = image_t.shape[:2]  # r90/r270/t/hvt échangent largeur et hauteur
+
         image_output_path = utils.build_output_filepath(image_path, image_out_dir, suffix_key=key)
-        
-        success = cv2.imwrite(str(image_output_path), image_t)
-        if not success:
-            warn(f"Échec de sauvegarde de l'image transformée '{key}' pour {image_output_path.name}.")
+        if not cv2.imwrite(str(image_output_path), image_t):
+            warn(f"Échec de sauvegarde de l'image '{key}' pour {image_output_path.name}.")
             continue
-            
+
         output_entry = Artifact(
             image_path=image_output_path,
             transformation="d4",
             params={"d4_key": key},
             extra={"reproducibility": trace},
         )
-        
-        # Enregistrement des labels
+
+        # 5. Reconstruction et enregistrement des labels transformés
         if has_labels:
-            bboxes_t = transformed.get("bboxes", [])
-            bbox_classes_t = transformed.get("bbox_classes", [])
-            keypoints_t = transformed.get("keypoints", [])
-            
             label_output_path = utils.build_output_filepath(label_path, label_out_dir, suffix_key=key)
-            img_h_t, img_w_t = image_t.shape[:2]  # Nouvelles dimensions de l'image transformée
-            
-            _write_yolo_labels(
-                label_output_path,
-                bboxes_t,
-                bbox_classes_t,
-                keypoints_t,
-                poly_classes,  
-                poly_lengths,
+
+            # Handler vierge aux nouvelles dimensions (r90/r270 échangent w et h)
+            out_handler = YoloLabelHandler(img_w_t, img_h_t)
+
+            # Bbox : déjà renormalisées par Albumentations (format 'yolo'), prêtes à l'emploi
+            out_handler.update_bboxes(
+                transformed.get("bboxes", []),
+                transformed.get("bbox_classes", []),
+                replace=False,
+            )
+
+            # Polygones : keypoints toujours dans le même ordre (remove_invisible=False),
+            # poly_lengths permet de regroupe les points par polygone
+            out_handler.update_from_keypoints(
+                transformed.get("keypoints", []),
+                transformed.get("kp_classes", []),
+                meta.get("poly_lengths", []),
                 img_w_t,
                 img_h_t,
+                replace=False,
             )
+
+            out_handler.save(label_output_path)
             output_entry.label_path = label_output_path
-            
+
         outputs.append(output_entry)
 
-    if not outputs:
-        return None
-
-    return outputs
+    return outputs if outputs else None

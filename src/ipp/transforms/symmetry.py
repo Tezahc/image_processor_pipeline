@@ -1,12 +1,15 @@
-import cv2
-import random
 from pathlib import Path
+import random
 from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
+from warnings import warn
+
+import cv2
 import numpy as np
 from ultralytics.data.utils import IMG_FORMATS
-from warnings import warn
-from ipp.utils.artifact import Artifact
+
 from ipp.utils import utils
+from ipp.utils.artifact import Artifact
+from ipp.utils.yolo_labels import YoloLabelHandler, BBoxLabel, SegmentationLabel
 
 
 SymmetryKey = Literal['o', 'h', 'v', 'hv']
@@ -48,26 +51,9 @@ def select_symmetries(
         selected = random.sample(pool, choose_random)
     
     if include_original and "o" not in selected:
-        selected.appen("o")
+        selected.append("o")
     
     return [SYMMETRIES[key] for key in selected]
-
-
-def _read_yolo_label(label_path: Path) -> Tuple[np.ndarray, np.ndarray]:
-    """Read yolo labels from a text file"""
-    data = np.loadtxt(label_path, ndmin=2)
-    classes = data[:, 0].astype(int)
-    bboxes = data[:, 1:].astype(float)
-    return classes, bboxes
-
-def _save_yolo_labels(
-    label_path: Path,
-    classes: np.ndarray,
-    bboxes: np.ndarray
-) -> None:
-    """Save yolo labels to a text file"""
-    data = np.column_stack((classes, bboxes))
-    np.savetxt(label_path, data, fmt=["%d", "%.6f", "%.6f", "%.6f", "%.6f"])
 
 def apply_symmetry_image(img: np.ndarray, spec: SymmetrySpec) -> np.ndarray:
     """Apply symmetry to an image."""
@@ -215,6 +201,10 @@ def generate_symmetries(
     # Crée le pool de symétries à faire
     specs = select_symmetries(pool, choose_random, include_original)
 
+    handler = None
+    if label_path is not None and len(output_dirs) > 1:
+        handler = YoloLabelHandler.from_file(label_path)
+
     # Sauvegarde des images générées
     outputs: List[Artifact] = []
     for spec in specs:
@@ -240,14 +230,27 @@ def generate_symmetries(
         )
 
         # --- Labels (optionnels) ---
-        if label_path is not None and len(output_dirs) > 1:
-            classes, bboxes = _read_yolo_label(label_path)
-            bboxes_sym = apply_symmetry_bboxes(bboxes, spec)
-
+        if handler is not None:
             #TODO: check la présence du dossier d'output des labels plus proprement
             label_output_path = utils.build_output_filepath(label_path, output_dirs[1], suffix_key=spec["key"])
-            _save_yolo_labels(label_output_path, classes, bboxes_sym)
+            out_handler = YoloLabelHandler()
 
+            # Bbox : flip sur la coordonnée centrale normalisée
+            for lbl in handler.bbox_labels:
+                new_xywhn = apply_symmetry_bboxes(lbl.xywhn.reshape(1, 4), spec)[0]
+                out_handler.add(BBoxLabel(lbl.class_id, new_xywhn))
+
+            # Segmentation: même logique de flip, directement sur les points normalisés.
+            # pas besoin d'albumentations: flip_x -> x' = 1-x, flip_y -> y' = 1-y
+            for lbl in handler.seg_labels:
+                pts = lbl.points_n.copy()
+                if spec["flip_x"]:
+                    pts[:, 0] = 1.0 - pts[:, 0]
+                if spec["flip_y"]:
+                    pts[:, 1] = 1.0 - pts[:, 1]
+                out_handler.add(SegmentationLabel(lbl.class_id, pts))
+
+            out_handler.save(label_output_path)
             output_entry.label_path = label_output_path
         outputs.append(output_entry)
 
