@@ -387,7 +387,7 @@ def crop_around_poi(
             min_width=w_img + pad_left + pad_right,
             border_mode=cv2.BORDER_CONSTANT,
             fill=0,      # Valeur de remplissage image
-            fill_mask=0  # Valeur de remplissage masque
+            # fill_mask=0  # Valeur de remplissage masque
         ),
         # Étape B: Rognage exact du carré maintenant que les bordures sont sécurisées
         A.Crop(
@@ -400,8 +400,8 @@ def crop_around_poi(
 
     masks, seg_classes = lbl_handler.as_masks()
     if masks:
-        augmented = transform(image=image_np, masks=masks)
-        new_masks = augmented["masks"]
+        augmented = transform(image=image_np, masks=np.stack(masks).astype(np.uint8))
+        new_masks = list(augmented["masks"])
     else:
         # l'image n'a pas de label associé
         augmented = transform(image=image_np)

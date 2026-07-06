@@ -248,9 +248,9 @@ def rotate_image_with_labels(
     rotate_tf = A.Rotate(limit=(angle_min, angle_max),
                          border_mode=cv2.BORDER_REPLICATE,
                          rotate_method="ellipse",
-                         crop_border=False,
+                         crop_border=crop_border,
                          p=1.0)
-    bbox_params = A.BboxParams(format="yolo",
+    bbox_params = A.BboxParams(coord_format="yolo",
                                label_fields=["class_labels"],
                                min_visibility=0.0)
     transform = A.Compose([rotate_tf], **compose_kwargs)

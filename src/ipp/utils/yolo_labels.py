@@ -311,12 +311,12 @@ class YoloLabelHandler:
         if self.seg_labels:
             if use_masks:
                 masks, seg_classes = self.as_masks(img_w, img_h)
-                call_kwargs["masks"] = masks
+                call_kwargs["masks"] = np.stack(masks).astype(np.uint8)
                 meta["seg_classes"] = seg_classes
             else:
                 keypoints, flat_classes, poly_lengths = self.as_keypoints(img_w, img_h)
                 compose_kwargs["keypoint_params"] = A.KeypointParams(
-                    format="xy", label_fields=["kp_classes"], remove_invisible=False
+                    coord_format="xy", label_fields=["kp_classes"], remove_invisible=False
                 )
                 call_kwargs["keypoints"] = keypoints
                 call_kwargs["kp_classes"] = flat_classes
