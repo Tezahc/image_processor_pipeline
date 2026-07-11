@@ -1,4 +1,38 @@
-import json
+"""
+conversion_yolo.py — Conversion de masques RLE (Label Studio) en labels YOLO segmentation.
+ 
+Conçu pour s'intégrer dans un DataFrameProcessingStep.
+Le DataFrame attendu (pré-agrégé, une ligne = une image) :
+ 
+    image_path      | rle_data                      | brushlabels
+    Path ou str     | List[List[int]]  (N masques)  | List[str]  (N labels, même ordre que rle_data)
+ 
+Exemple de préparation du DataFrame (agrégation depuis l'export Label Studio,
+une ligne par région -> une ligne par image) :
+ 
+    df_agg = (
+        df.groupby("image")
+        .agg(rle_data=("rle", list), brushlabels=("brushlabels", list))
+        .reset_index()
+        .rename(columns={"image": "image_name"})
+    )
+    df_agg["image_path"] = image_pool / df_agg["image_name"]
+ 
+Exemple d'utilisation dans un pipeline :
+ 
+    step = DataFrameProcessingStep(
+        name="rle_to_yolo",
+        source=df_agg,
+        path_cols=["image_path"],
+        data_cols=["rle_data", "brushlabels"],
+        output_dirs=[images_out_dir, labels_out_dir],
+        process_function=convert_rle_regions_to_yolo,
+        options={"label_map": {"catheter": 1, "wire": 2}, "tol": 0.002},
+        save_log=True,   # manifest JSON — inclut les params de reconstruction de chaque région
+    )
+"""
+
+
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -8,7 +42,9 @@ from label_studio_converter.brush import decode_rle
 import numpy as np
 import pandas as pd
 
-from deepcath import utils
+from deepcath import utils as dutils
+from ipp.utils import utils
+from ipp.utils.artifact import Artifact
 
 
 logger = logging.getLogger(__name__)
@@ -17,7 +53,7 @@ logger = logging.getLogger(__name__)
 class YoloSegmentationConverter:
     def __init__(self, image_name :str|Path):
         self.image_name = image_name
-        self.img, self.w, self.h = utils.load_image(self.image_name)
+        self.img, self.w, self.h = dutils.load_image(self.image_name)
         self.yolo_lines = []
 
     def apply_crop(self, x_offset :int, y_offset :int, final_width :int, final_height :int):
@@ -174,6 +210,9 @@ class YoloSegmentationConverter:
         logger.debug(f"Yolo lines sur l'image", extra={"image": self._visualize_yolo(lines)})
         return lines
     
+    def save_img(self, output_path:Path):
+        self.img.save(output_path)
+    
     def write_yolo_lines(self, output_path:Path):
         with output_path.open("w", encoding="utf-8") as f:
             f.write("\n".join(self.yolo_lines))
@@ -204,178 +243,142 @@ class YoloSegmentationConverter:
         return self.yolo_lines
 
 
-def convert_rle_to_yolo_labels(
+def convert_rle_regions_to_yolo(
     image_path: Path,
+    rle_data: List[List[int]],
+    brushlabels: List[str],
     output_dirs: List[Path],
     *,
-    df: pd.DataFrame,
     label_map: Dict[str, int],
-    filename_col: str = "image",
-    brushlabels_col: str = "brushlabels",
-    rle_col: str = "rle",
     tol: float = 0.001,
     simplify: bool = True,
-    save_params: bool = True,
     **kwargs,
-) -> Optional[Path]:
-    """Convertit les annotations RLE d'une image en fichier de labels YOLO segmentation.
+) -> Optional[List[Artifact]]:
+    """Convertit toutes les régions RLE d'une image en un unique fichier de labels YOLO segmentation.
 
-    Cette fonction est conçue pour être passée comme ``process_function`` à une
-    ``DataFrameImportStep``. Elle reçoit un chemin image à la fois (mode ``one_input``),
-    filtre le DataFrame sur ce fichier, puis exécute la chaîne de conversion
-    ``YoloSegmentationConverter`` pour chaque région annotée.
-
-    Si ``save_params=True``, un fichier sidecar ``<stem>.params.json`` est écrit dans
-    le même dossier de sortie. Il contient les hyperparamètres (``tol``, ``simplify``)
-    et, pour chaque région, le ``brushlabels``, le ``class_id`` résolu et le ``rle``
-    brut. Ces données sont suffisantes pour rejouer la conversion à l'identique sans
-    accès au DataFrame d'origine.
+    Conçue pour être appelée par ``DataFrameProcessingStep`` — chaque appel traite
+    une image et l'ensemble de ses régions annotées (jointure 1→N déjà résolue en
+    amont, lors de la préparation du DataFrame : une ligne = une image,
+    ``rle_data`` et ``brushlabels`` sont des listes de même longueur).
 
     Parameters
     ----------
     image_path : Path
-        Chemin absolu vers l'image à traiter, fourni par l'orchestrateur.
-        Seul le ``.name`` est utilisé pour filtrer le DataFrame.
+        Image source, utilisée pour dimensionner les masques décodés
+        (``YoloSegmentationConverter`` s'appuie sur ``dutils.load_image``).
+    rle_data : List[List[int]]
+        Liste des données RLE brutes (une par région annotée sur l'image).
+    brushlabels : List[str]
+        Libellés de classe associés, **même ordre et même longueur** que ``rle_data``.
     output_dirs : List[Path]
-        Liste des dossiers de sortie fournie par le pipeline.
-        ``output_dirs[0]`` reçoit le ``.txt`` YOLO (et le ``.params.json`` si activé).
-    df : pd.DataFrame
-        DataFrame contenant *toutes* les annotations. Doit posséder au minimum les
-        colonnes ``filename_col``, ``brushlabels_col`` et ``rle_col``.
-        Passé via ``options={"df": df, ...}`` lors de la création de l'étape.
+        ``[0]`` → dossier de sortie des images YOLO (créé par le pipeline).
+        ``[1]`` → dossier de sortie des labels YOLO (créé par le pipeline).
     label_map : Dict[str, int]
-        Correspondance ``brushlabels -> class_id`` YOLO.
-        Les libellés absents de ce dictionnaire reçoivent l'id ``0`` (comportement
-        identique à ``labels.get(row.brushlabels, 0)`` du notebook original).
-    filename_col : str, default ``"image"``
-        Nom de la colonne contenant les noms de fichiers dans ``df``.
-    brushlabels_col : str, default ``"brushlabels"``
-        Nom de la colonne contenant le label de classe de chaque région.
-    rle_col : str, default ``"rle"``
-        Nom de la colonne contenant les données RLE brutes.
-    tol : float, default ``0.001``
-        Tolérance de simplification polygonale passée à ``simplify_polygons``
-        (paramètre ``epsilon`` relatif au périmètre).
-    simplify : bool, default ``True``
+        Correspondance ``brushlabels -> class_id`` YOLO. Un libellé absent de ce
+        dictionnaire reçoit l'id ``0``.
+    tol : float, default 0.001
+        Tolérance de simplification polygonale (epsilon relatif au périmètre),
+        transmise à ``simplify_polygons``.
+    simplify : bool, default True
         Si ``False``, l'étape de simplification des polygones est sautée.
-    save_params : bool, default ``True``
-        Si ``True``, écrit le fichier sidecar ``.params.json`` de reconstruction.
-    **kwargs
-        Arguments supplémentaires ignorés silencieusement (tolérance aux options
-        génériques du pipeline).
 
     Returns
     -------
-    Path
-        Chemin vers le fichier ``.txt`` YOLO créé (``output_dirs[0] / <stem>.txt``).
+    List[Artifact]
+        Liste à un élément. ``Artifact.image_path`` pointe vers le fichier image
+        produit (``output_dirs[0]``), et ``Artifact.label_path`` pointe vers le
+        fichier ``.txt`` YOLO produit (``output_dirs[1]``). 
+        ``params`` contient ``tol``, ``simplify`` et, pour chaque région 
+        effectivement convertie, son ``brushlabels``, ``class_id`` résolu
+        et ``rle`` brut : de quoi rejouer la conversion à l'identique sans DataFrame.
+
     None
-        Si aucune annotation n'est trouvée pour cette image dans ``df``,
-        ou si une erreur survient pendant la conversion.
+        Si aucune région n'est fournie, ou si toutes échouent à la conversion
+        (aucune ligne YOLO générée).
+
+    Raises
+    ------
+    ValueError
+        Si ``rle_data`` et ``brushlabels`` n'ont pas la même longueur — signe
+        d'une désynchronisation lors de l'agrégation du DataFrame en amont.
 
     Notes
     -----
-    **Reconstruction à l'identique**
+    Une image sans annotation ne devrait jamais atteindre cette fonction dans le
+    flux normal (l'agrégation ``groupby("image")`` ne produit une ligne que pour
+    les images ayant au moins une région) ; si ``rle_data`` est malgré tout vide,
+    aucune ligne YOLO n'est produite et la fonction retourne ``None``.
 
-    Le fichier ``.params.json`` sidecar contient tout le nécessaire pour rejouer
-    la conversion sans le DataFrame original :
+    L'échec de chargement de l'image (fichier manquant, format invalide, etc.)
+    n'est pas intercepté ici : l'exception remonte telle quelle et le pipeline
+    la capture nativement, l'enregistrant avec le statut ``"Error"`` et son
+    message — pas besoin de dupliquer cette logique dans la fonction.
 
-    .. code-block:: json
-
-        {
-            "image_name": "img_001.jpg",
-            "tol": 0.001,
-            "simplify": true,
-            "regions": [
-                {
-                    "brushlabels": "catheter",
-                    "class_id": 1,
-                    "rle": [0, 255, 0, ...]
-                }
-            ]
-        }
-
-    **Utilisation avec DataFrameImportStep**
-
-    .. code-block:: python
-
-        step = DataFrameImportStep(
-            name="rle_to_yolo",
-            source=df_full,                     # DataFrame ou chemin .pkl / .csv
-            image_pool=Path("images/"),
-            filename_col="image",               # colonne du nom de fichier dans df
-            process_function=convert_rle_to_yolo_labels,
-            output_dirs=[Path("dataset/labels")],
-            options={
-                "df": df_full,
-                "label_map": {"catheter": 1, "wire": 2},
-                "tol": 0.002,
-                "simplify": True,
-                "save_params": True,
-            },
-        )
+    Examples
+    --------
+        >>> from pathlib import Path
+    >>> artifacts = convert_rle_regions_to_yolo(
+    ...     image_path=Path("images/img_001.jpg"),
+    ...     rle_data=[[0, 255, 0, 255]],          # un RLE brut par région
+    ...     brushlabels=["catheter"],
+    ...     output_dirs=[Path("dataset/images"), Path("dataset/labels")],
+    ...     label_map={"catheter": 1, "wire": 2},
+    ... )
+    >>> artifacts[0].image_path  # doctest: +SKIP
+    PosixPath('dataset/images/img_001.jpg')
+    >>> artifacts[0].label_path  # doctest: +SKIP
+    PosixPath('dataset/labels/img_001.txt')
     """
-    output_dir = output_dirs[0]
-    image_name = image_path.name  # seul le nom de fichier sert au filtre (comme dans le notebook)
+    image_dir, label_dir = utils._validate_dirs(output_dirs, nb_dirs=2)
 
-    # --- Filtre du DataFrame sur l'image courante ---
-    rows: pd.DataFrame = df[df[filename_col] == image_name]
+    if len(rle_data) != len(brushlabels):
+        raise ValueError(
+            f"[{image_path.name}] rle_data ({len(rle_data)}) et brushlabels "
+            f"({len(brushlabels)}) de longueurs différentes — vérifier "
+            f"l'agrégation du DataFrame en amont (groupby)."
+        )
 
-    if rows.empty:
-        logger.warning(f"Aucune annotation trouvée pour '{image_name}' dans le DataFrame. Image ignorée.")
-        return None
-
-    # --- Conversion ---
-    try:
-        converter = YoloSegmentationConverter(image_path)
-    except Exception as e:
-        logger.error(f"Impossible de charger l'image '{image_path}': {e}")
-        return None
+    # Le chargement de l'image n'est pas protégé : une erreur ici remonte au
+    # pipeline qui la logue nativement en statut "Error" (cf. Notes).
+    converter = YoloSegmentationConverter(image_path)
 
     reconstruction_regions = []
 
-    for _, row in rows.iterrows():
-        rle_data = row[rle_col]
-        brushlabel = row[brushlabels_col]
+    for rle, brushlabel in zip(rle_data, brushlabels):
         class_id = label_map.get(brushlabel, 0)
 
         try:
-            converter.convert(rle_data=rle_data, class_id=class_id, tol=tol, simplify=simplify)
+            converter.convert(rle_data=rle, class_id=class_id, tol=tol, simplify=simplify)
         except Exception as e:
-            # On log et on continue : une région défectueuse ne doit pas bloquer les autres
-            logger.error(f"Échec conversion région '{brushlabel}' pour '{image_name}': {e}")
+            # Une région défectueuse ne bloque pas les autres régions de l'image
+            logger.error(f"[{image_path.name}] Échec conversion région '{brushlabel}' : {e}")
             continue
 
-        if save_params:
-            reconstruction_regions.append({
-                "brushlabels": brushlabel,
-                "class_id": class_id,
-                "rle": rle_data,
-            })
+        reconstruction_regions.append({
+            "brushlabels": brushlabel,
+            "class_id": class_id,
+            "rle": rle,
+        })
 
-    # Rien n'a été converti (toutes les régions ont échoué)
     if not converter.yolo_lines:
-        logger.warning(f"Aucune ligne YOLO générée pour '{image_name}'.")
+        logger.warning(f"[{image_path.name}] Aucune ligne YOLO générée (aucune région fournie ou toutes en échec).")
         return None
 
-    # --- Écriture du fichier de labels YOLO ---
-    label_path = output_dir / Path(image_name).with_suffix(".txt")
+    label_path = label_dir / f"{image_path.stem}.txt"
     converter.write_yolo_lines(label_path)
+    
+    image_path_out = image_dir / image_path.name
+    converter.save_img(image_path_out)
 
-    # --- Écriture du fichier sidecar de reconstruction ---
-    if save_params:
-        params = {
-            "image_name": image_name,
+    artifact = Artifact(
+        image_path=image_path_out,
+        transformation=convert_rle_regions_to_yolo.__name__,
+        params={
             "tol": tol,
             "simplify": simplify,
             "regions": reconstruction_regions,
-        }
-        params_path = output_dir / Path(image_name).with_suffix(".params.json")
-        try:
-            with params_path.open("w", encoding="utf-8") as f:
-                json.dump(params, f, indent=2, ensure_ascii=False)
-            logger.info(f"Fichier de reconstruction écrit : {params_path}")
-        except (IOError, TypeError) as e:
-            # Non bloquant : le label YOLO est déjà écrit
-            logger.warning(f"Impossible d'écrire le fichier de reconstruction pour '{image_name}': {e}")
+        },
+        label_path=label_path
+    )
 
-    return label_path
+    return [artifact]
