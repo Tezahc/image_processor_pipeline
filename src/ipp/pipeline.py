@@ -894,11 +894,13 @@ class DataFrameProcessingStep(ProcessingStep):
         source: "str | Path | pd.DataFrame",
         path_cols: List[str],
         data_cols: Optional[List[str]] = None,
+        df_save_path: Optional[str|Path] = None,
         **kwargs,
     ):
         self.source = source
         self.path_cols = path_cols
         self.data_cols = data_cols or []
+        self._df_save_path = Path(df_save_path) if df_save_path else None
         self._df: Optional[pd.DataFrame] = None
 
         # Dummy input_dirs : non vide pour satisfaire ProcessingPipeline.add_step,
@@ -907,12 +909,28 @@ class DataFrameProcessingStep(ProcessingStep):
 
         super().__init__(input_dirs=dummy_input, **kwargs)
 
+    def _save_df_to_pickle(self, df: pd.DataFrame):
+        if not self.save_log:
+            return
+        if not self._df_save_path:
+            self._df_save_path = (self.root_dir or Path()) / f"{self.name}.pkl"
+
+        if self._df_save_path.is_file():
+            print(f"WARNING: fichier de sauvegarde du dataframe déjà existant '{self._df_save_path}'."
+                  f"Il sera écrasé...")
+        
+        df.to_pickle(self._df_save_path)
+        return
+    
     def _load_dataframe(self) -> pd.DataFrame:
         """Charge le DataFrame depuis la source (pickle, csv, ou DataFrame direct)."""
         if isinstance(self.source, pd.DataFrame):
+            self._save_df_to_pickle(self.source)
             return self.source.copy()
         elif isinstance(self.source, pd.Series):
-            return pd.DataFrame(self.source)
+            as_df =  pd.DataFrame(self.source)
+            self._save_df_to_pickle(as_df)
+            return as_df
 
         path = Path(self.source)
         if not path.exists():
@@ -946,7 +964,7 @@ class DataFrameProcessingStep(ProcessingStep):
             )
 
         n = len(self._df)
-        n_u = len(self._df.iloc[:, 1].unique())
+        n_u = len(self._df.iloc[:, 0].unique())
         print(
             f"  {n_u} input(s) → {n} appel(s) à '{self.process_function.__name__}' "
             f"({'|'.join(self.path_cols + self.data_cols)})."
