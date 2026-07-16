@@ -42,7 +42,7 @@ MODE_POOLS: Dict[str, Tuple[str, ...]] = {
 }
 
 
-def select_d4_transforms(
+def _select_d4_transforms(
     mode: str,
     pool: Optional[List[str]],
     choose_random: Optional[int],
@@ -180,7 +180,7 @@ def generate_d4_transforms(
         raise FileNotFoundError(f"[{image_path.name} - D4] Impossible de charger l'image.")
     img_h, img_w = image.shape[:2]
 
-    selected, trace = select_d4_transforms(mode, pool, choose_random, add_original_copy, seed)
+    selected, trace = _select_d4_transforms(mode, pool, choose_random, add_original_copy, seed)
 
     # 3. Chargement des labels via le handler — une seule lecture pour toutes les transformations.
     #    compose_kwargs / call_kwargs sont identiques pour chaque clé D4 (seul A.D4 change) :
