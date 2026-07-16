@@ -92,3 +92,17 @@ def copy_from_label(
                         params={"images_dir": images_source_dir, "image_path": image_path})
     
     return [artifact]
+
+def copy_images(
+    input_image: Path,
+    output_dirs: List[Path],
+    **options: Any
+) -> Optional[List[Artifact]]:
+    output_dir = utils._validate_dirs(output_dirs, 1)
+
+    image, w, h = utils.load_image_pil(input_image)
+
+    image_path_out = utils.build_output_filepath(input_image, output_dir, suffix_key=options.get("suffix") or None)
+    image.save(image_path_out)
+
+    return [Artifact(image_path_out, copy_images.__name__, {})]

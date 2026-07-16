@@ -1,7 +1,9 @@
-import numpy as np
-import cv2
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+import cv2
+import numpy as np
+from PIL import Image, ImageOps
 
 
 def check_path(folder_name, root=None):
@@ -126,6 +128,26 @@ def _load_image(filepath: Path) -> np.ndarray:
     if img is None:
         raise IOError(f"Impossible de charger l'image {filepath.name} via OpenCV.")
     return img
+
+def load_image_pil(image_path: Path) -> Image:
+    """Charge une image du dataset à partir de son nom et renvoie l'image, sa largeur et sa hauteur.
+    
+    L'orientation de l'image est automatiquement corrigée en se basant sur les données EXIF.
+    
+    Args:
+        image_name (str | Path): Le nom du fichier de l'image à charger.
+
+    Returns:
+        Tuple[Image.Image, int, int]: Un tuple contenant l'objet image PIL,
+                                      sa largeur (w) et sa hauteur (h).
+    """
+    if not image_path.is_file():
+        raise FileNotFoundError(f"Image non trouvée: {image_path}")
+    image = Image.open(image_path)
+    ImageOps.exif_transpose(image, in_place=True)
+    w, h = image.size
+    
+    return image, w, h
 
 def _read_bboxes(filepath: Path) -> Tuple[np.ndarray, np.ndarray]:
     """Lit un fichier de labels YOLO (.txt) et renvoie les classes et bboxes.
