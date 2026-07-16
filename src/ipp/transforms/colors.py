@@ -165,39 +165,44 @@ def apply_brightness_contrast(
 
     # Récupération des paramètres effectivement appliqués.
     # AlbumentationsX place les params sous la clé du nom de la classe dans
-    # transformed["applied_params"]. Structure attendue :
-    #   {"RandomBrightnessContrast": {"brightness": 0.12, "contrast": -0.08}}
+    # transformed["applied_transforms"]. Structure attendue :
+    #   [("RandomBrightnessContrast", {"brightness": 0.12, "contrast": -0.08})]
     # ou absente / vide si la transformation a été skippée (tirage p défavorable).
-    #
-    # Si cette structure ne correspond pas à ta version, inspecter avec :
-    #   print(transformed.keys())
-    #   print(transformed.get("applied_params"))
-    applied_params: dict = transformed.get("applied_params", {})
-    bc_params: dict = applied_params.get("RandomBrightnessContrast", {})
-    was_applied = bool(bc_params)
-    print(applied_params, transformed["image"].size)
-    if not was_applied:
-        # Transformation skippée (tirage p défavorable pour cette seed/image)
-        # Pas de fichier de sortie créé — le pipeline logge cette entrée comme None.
-        return None
+
+    applied_transforms: dict = transformed.get("applied_transforms", [])
+    was_applied = False
+    bc_params = {}
+
+    if applied_transforms and isinstance(applied_transforms, list):
+        for item in applied_transforms:
+            if isinstance(item, tuple) and len(item) == 2:
+                transform_name, params_dict = item
+                if "RandomBrightnessContrast" not in str(transform_name):
+                    continue
+                was_applied=True
+                bc_params = params_dict
+                break
+
+    output_image = transformed["image"] if was_applied else image
 
     out_image_path = utils.build_output_filepath(image_path, image_out_dir, **options)
-    if not cv2.imwrite(str(out_image_path), transformed["image"]):
+    if not cv2.imwrite(str(out_image_path), output_image):
         raise IOError(f"Échec écriture image : {out_image_path}")
-
-    return Artifact(
+    
+    # Extraire les valeurs appliquées (ou 0 si skippée)
+    brightness = bc_params.get("brightness", bc_params.get("brightness_range", 0.0)) or 0.0
+    contrast = bc_params.get("contrast", bc_params.get("contrast_range", 0.0)) or 0.0
+    
+    return [Artifact(
         image_path=out_image_path,
-        transformation="brightness_contrast",
+        transformation=apply_brightness_contrast.__name__,
         params={
             # --- Reproductibilité par seed (méthode 1) ---
             "seed": seed,
             # --- Reproductibilité par valeurs exactes (méthode 2, plus robuste) ---
             # Ces valeurs permettent de reconstruire sans dépendre du RNG interne
-            "brightness": bc_params.get("brightness"),
-            "contrast": bc_params.get("contrast"),
-            # --- Configuration de l'appel ---
-            "brightness_limit": brightness_limit,
-            "contrast_limit": contrast_limit,
-            "p": p,
+            "brightness": brightness,
+            "contrast": contrast,
+            "was_applied":was_applied
         },
-    )
+    )]

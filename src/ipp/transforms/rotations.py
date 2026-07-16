@@ -211,7 +211,7 @@ def rotate_image_with_labels(
     rng = random.Random(seed)
     angles = [rng.uniform(angle_min, angle_max) for _ in range(num_rotations)]
     if include_original:
-        angles.append(0.0)
+        angles = [0.0] + angles
     
     trace = {
         "num_rotations": num_rotations,
@@ -244,18 +244,6 @@ def rotate_image_with_labels(
     
     artifacts: List[Artifact] = []
 
-    # --- Albumentations transform ---
-    rotate_tf = A.Rotate(limit=(angle_min, angle_max),
-                         border_mode=cv2.BORDER_REPLICATE,
-                         rotate_method="ellipse",
-                         crop_border=crop_border,
-                         p=1.0)
-    bbox_params = A.BboxParams(coord_format="yolo",
-                               label_fields=["class_labels"],
-                               min_visibility=0.0)
-    transform = A.Compose([rotate_tf], **compose_kwargs)
-
-    
     # --- Rotations ---
     for idx, angle in enumerate(angles):
         # is_original = angle == 0.0
@@ -263,11 +251,26 @@ def rotate_image_with_labels(
         
         if is_original:
             rotated_image = image
-            transformed = {"image": image, **call_kwargs_labels}
+            # transformed = {"image": image, **call_kwargs_labels}
+            transformed_output = call_kwargs_labels if call_kwargs_labels else {}
         else:
-            rotated = transform(image=image, **call_kwargs_labels)
-            rotated_image = rotated["image"]
-            transformed = rotated
+            # créer une rotation avec l'angle exact
+            rotate_tf = A.Rotate(
+                limit=(angle, angle),
+                border_mode=cv2.BORDER_REPLICATE,
+                rotate_method="ellipse",
+                crop_border=crop_border,
+                p=1.0
+            )
+            transform = A.Compose([rotate_tf], **compose_kwargs)
+
+            try:
+                rotated = transform(image=image, **call_kwargs_labels)
+                rotated_image = rotated["image"]
+                transformed_output = rotated
+            except Exception as e:
+                print(f"Erreur [{image_path.name}] rotation angle={angle:.1f}°: {e}")
+                continue
 
         # setdefault permet de prendre cette valeur si l'arg n'est pas fourni. 
         # Mais on peut toujours l'écraser en le précisant.
@@ -288,14 +291,14 @@ def rotate_image_with_labels(
 
             # Bbox
             out_handler.update_bboxes(
-                transformed.get("bboxes", []),
-                transformed.get("bboxes_classes", []),
+                transformed_output.get("bboxes", []),
+                transformed_output.get("bboxes_classes", []),
                 replace=False
             )
 
             # Segmentation (reconstruite depuis les masques transformés)
             out_handler.update_from_masks(
-                transformed.get("masks", []),
+                transformed_output.get("masks", []),
                 meta.get("seg_classes", []),
                 replace=False
             )
