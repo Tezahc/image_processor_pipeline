@@ -423,22 +423,17 @@ def crop_around_poi(
         image_path=out_img_path,
         transformation=crop_around_poi.__name__,
         params={
-            "original_bbox": bbox,
+            "original_width":w_img,
+            "original_height":h_img,
             "center": [cx, cy],
-            "crop_ratio": ratio,
-            "crop_margin": margin,
             "final_size": final_size,
             "padding_applied": {
                 "top": pad_top, "bottom": pad_bottom, 
                 "left": pad_left, "right": pad_right
-            }
+            },
+            "polygons_found":len(lbl_handler)
         },
         label_path=out_label_path,
-        extra={
-            "source_image": image_path.name,
-            "source_label": seg_label_path.name,
-            "polygons_found":len(lbl_handler)
-        }
     )
 
     return [artifact]

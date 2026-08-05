@@ -342,8 +342,6 @@ def convert_rle_regions_to_yolo(
     # pipeline qui la logue nativement en statut "Error" (cf. Notes).
     converter = YoloSegmentationConverter(image_path)
 
-    reconstruction_regions = []
-
     for rle, brushlabel in zip(rle_data, brushlabels):
         class_id = label_map.get(brushlabel, 0)
 
@@ -354,19 +352,13 @@ def convert_rle_regions_to_yolo(
             logger.error(f"[{image_path.name}] Échec conversion région '{brushlabel}' : {e}")
             continue
 
-        reconstruction_regions.append({
-            "brushlabels": brushlabel,
-            "class_id": class_id,
-            "rle": rle,
-        })
-
     if not converter.yolo_lines:
         logger.warning(f"[{image_path.name}] Aucune ligne YOLO générée (aucune région fournie ou toutes en échec).")
         return None
 
     label_path = label_dir / f"{image_path.stem}.txt"
     converter.write_yolo_lines(label_path)
-    
+
     image_path_out = image_dir / image_path.name
     converter.save_img(image_path_out)
 
@@ -374,9 +366,11 @@ def convert_rle_regions_to_yolo(
         image_path=image_path_out,
         transformation=convert_rle_regions_to_yolo.__name__,
         params={
+            "original_width": converter.w,
+            "original_height": converter.h,
             "tol": tol,
             "simplify": simplify,
-            "regions": reconstruction_regions,
+            "yolo_lines_len": len(converter.yolo_lines)
         },
         label_path=label_path
     )
