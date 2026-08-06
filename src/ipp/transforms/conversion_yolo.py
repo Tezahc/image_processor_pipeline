@@ -69,6 +69,22 @@ class YoloSegmentationConverter:
         # checkpoint visuel du nouveau canvas
         logger.debug(f"Nouveau canvas après crop", extra={"image": np.array(self.img)})
 
+    @staticmethod
+    def _is_missing_rle(rle_data) -> bool:
+        """Détecte une entrée RLE manquante ou vide.
+
+        Couvre les cas rencontrés en pratique lorsqu'une image n'a pas de
+        région annotée : ``None``, ``np.nan`` (scalaire, typiquement injecté
+        par un ``groupby``/merge pandas incomplet), ou une liste/array vide.
+        """
+        if rle_data is None:
+            return True
+        if np.isscalar(rle_data) and pd.isna(rle_data):
+            return True
+        if hasattr(rle_data, "__len__") and len(rle_data) == 0:
+            return True
+        return False
+
     def rle_to_mask(self, rle_raw_data :List[int]) -> np.ndarray:
         """
         Etape 0: Décodage RLE vers masque binaire
@@ -220,6 +236,12 @@ class YoloSegmentationConverter:
         
     def convert(self, rle_data, class_id, tol=0.001, simplify=True):
         """Pipeline complet pour un masque donné"""
+        # Région manquante (image sans label) : rien à convertir, on ne touche pas
+        # à self.yolo_lines et on ne plante pas (decode_rle attend une liste d'int).
+        if self._is_missing_rle(rle_data):
+            logger.debug(f"[{self.image_name}] RLE manquant/vide (class_id={class_id}) — région ignorée.")
+            return self.yolo_lines
+
         # 0. RLE -> Mask
         mask = self.rle_to_mask(rle_data)
 
@@ -285,16 +307,12 @@ def convert_rle_regions_to_yolo(
     Returns
     -------
     List[Artifact]
-        Liste à un élément. ``Artifact.image_path`` pointe vers le fichier image
-        produit (``output_dirs[0]``), et ``Artifact.label_path`` pointe vers le
-        fichier ``.txt`` YOLO produit (``output_dirs[1]``). 
-        ``params`` contient ``tol``, ``simplify`` et, pour chaque région 
-        effectivement convertie, son ``brushlabels``, ``class_id`` résolu
-        et ``rle`` brut : de quoi rejouer la conversion à l'identique sans DataFrame.
-
-    None
-        Si aucune région n'est fournie, ou si toutes échouent à la conversion
-        (aucune ligne YOLO générée).
+        Liste à un élément, toujours produite (y compris quand l'image n'a
+        aucun label associé, cf. Notes). ``Artifact.image_path`` pointe vers
+        le fichier image produit (``output_dirs[0]``), et ``Artifact.label_path``
+        pointe vers le fichier ``.txt`` YOLO produit (``output_dirs[1]``) —
+        potentiellement vide.
+        ``params`` contient ``tol``, ``simplify``.
 
     Raises
     ------
@@ -304,10 +322,16 @@ def convert_rle_regions_to_yolo(
 
     Notes
     -----
-    Une image sans annotation ne devrait jamais atteindre cette fonction dans le
-    flux normal (l'agrégation ``groupby("image")`` ne produit une ligne que pour
-    les images ayant au moins une région) ; si ``rle_data`` est malgré tout vide,
-    aucune ligne YOLO n'est produite et la fonction retourne ``None``.
+    Une image sans annotation peut tout à fait atteindre cette fonction : en
+    pratique, une jointure/aggrégation incomplète en amont peut produire des
+    entrées telles que ``rle_data=[nan]`` / ``brushlabels=[nan]`` plutôt que
+    des listes vides. Ces régions manquantes (``None``, ``nan`` scalaire ou
+    liste vide) sont détectées et ignorées silencieusement, région par région
+    (``YoloSegmentationConverter._is_missing_rle``) — la fonction ne plante
+    jamais pour cette raison. Dans tous les cas (aucune région fournie,
+    régions toutes manquantes, ou toutes en échec de conversion), l'image est
+    tout de même sauvegardée et un fichier de labels ``.txt`` vide est créé,
+    pour garder une paire image/label cohérente dans le dataset de sortie.
 
     L'échec de chargement de l'image (fichier manquant, format invalide, etc.)
     n'est pas intercepté ici : l'exception remonte telle quelle et le pipeline
@@ -353,13 +377,15 @@ def convert_rle_regions_to_yolo(
             continue
 
     if not converter.yolo_lines:
-        logger.warning(f"[{image_path.name}] Aucune ligne YOLO générée (aucune région fournie ou toutes en échec).")
-        return None
+        # Cas normal pour une image sans label (brush) associé : on ne plante pas,
+        # on produit tout de même la paire de sortie (image + fichier .txt vide),
+        # cohérente avec le reste du dataset YOLO.
+        logger.info(f"[{image_path.name}] Aucune région valide (image sans label ou régions toutes en échec) — fichier label vide généré.")
 
-    label_path = label_dir / f"{image_path.stem}.txt"
+    label_path = utils.build_output_filepath(image_path.with_suffix(".txt"), label_dir)
     converter.write_yolo_lines(label_path)
 
-    image_path_out = image_dir / image_path.name
+    image_path_out = utils.build_output_filepath(image_path, image_dir)
     converter.save_img(image_path_out)
 
     artifact = Artifact(
