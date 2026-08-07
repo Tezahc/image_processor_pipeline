@@ -12,6 +12,6 @@ dependencies = [
     "numpy>=2.4.4",
     "opencv-python",
     "pillow>=12.2.0",
-    "tqdm>=4.67.3",
+    "tqdm>=4.60",
     "ultralytics>=8.4.21",
 ]
